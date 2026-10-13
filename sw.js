@@ -1,5 +1,5 @@
-/* BetterYou 2.0 - offline static shell, online-first for latest updates. */
-const CACHE_NAME = 'betteryou-shell-2.0.0';
+/* BetterYou 2.1 - offline static shell, online-first for latest updates. */
+const CACHE_NAME = 'betteryou-shell-2.1.0';
 const SHELL = ['./', './index.html', './app.js', './manifest.webmanifest', './icon.svg'];
 self.addEventListener('install', event => {
   event.waitUntil((async () => {

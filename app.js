@@ -1,9 +1,10 @@
 const $=id=>document.getElementById(id);
-const today=()=>new Date().toLocaleDateString('en-CA');
+const today=()=>{const d=new Date();return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-')};
 const uid=()=>Math.random().toString(36).slice(2)+Date.now().toString(36);
 const defaultState={
  profile:{age:null,height:null,weight:null,sex:'',calories:2000,protein:100,fat:65,steps:8000},
  weights:[],
+ dailySteps:[],
  foods:[],customFoods:[],shopping:[],lifts:[],completed:{},
  workouts:[
  {name:'День 1 · Грудь + руки',day:'Пн',items:[['Жим гантелей лёжа','Грудь',3,'8–12'],['Жим гантелей на наклонной скамье','Грудь',3,'8–12'],['Сведение рук в кроссовере','Грудь',2,'12–15'],['Сгибание рук с гантелями','Бицепс',3,'8–12'],['Сгибание на скамье Скотта или на блоке','Бицепс',2,'10–15'],['Разгибание рук на блоке с канатом','Трицепс',3,'10–15'],['Разгибание рук над головой на блоке','Трицепс',2,'10–15']]},
@@ -24,7 +25,7 @@ const CONFIG_KEY='betteryou-supabase-config-v2';
 const userKey=id=>`betteryou-user-${id}`;
 const pendingKey=id=>`betteryou-pending-${id}`;
 const versionKey=id=>`betteryou-version-${id}`;
-const dataFields=['profile','weights','foods','customFoods','shopping','lifts','completed','workouts','recipes'];
+const dataFields=['profile','weights','dailySteps','foods','customFoods','shopping','lifts','completed','workouts','recipes'];
 function cleanData(d){
  const result=structuredClone(defaultState);
  if(!d||typeof d!=='object'||Array.isArray(d))return result;
@@ -52,6 +53,44 @@ function save(){
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function go(tab){document.querySelectorAll('.tabscreen').forEach(x=>x.classList.toggle('active',x.id===tab));document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('active',x.dataset.tab===tab));window.scrollTo({top:0,behavior:'smooth'});if(tab==='training')renderTraining()}
 document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>go(b.dataset.tab));
+// Steps 2.1: preserve legacy step entries stored alongside weight measurements.
+function stepsFor(date){
+ const entry=state.dailySteps.find(x=>x.date===date);
+ if(entry)return Math.max(0,Number(entry.steps)||0);
+ return Math.max(0,Number(state.weights.find(w=>w.date===date)?.steps)||0);
+}
+function recordedStepDates(){return [...new Set([...state.weights.filter(x=>x.steps!=null).map(x=>x.date),...state.dailySteps.map(x=>x.date)])].filter(x=>/^\d{4}-\d{2}-\d{2}$/.test(x)).sort().reverse()}
+function dayOffset(offset){const d=new Date();d.setHours(12,0,0,0);d.setDate(d.getDate()+offset);return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-')}
+function renderSteps(){
+ $('stepDate').value ||= today();
+ const chosen=$('stepDate').value||today();
+ const current=stepsFor(chosen),target=Math.max(1,Number(state.profile.steps)||8000);
+ $('stepsSelected').textContent=current.toLocaleString('ru-RU');
+ $('stepsTarget').textContent=target.toLocaleString('ru-RU');
+ $('stepsProgress').style.width=Math.min(100,Math.round(current/target*100))+'%';
+ $('stepsRemaining').textContent=current>=target?'Цель на этот день выполнена!':`До цели осталось ${(target-current).toLocaleString('ru-RU')} шагов`;
+ $('stepsTodayLabel').textContent=chosen===today()?'Сегодня':'Выбранная дата: '+chosen;
+ const last7=Array.from({length:7},(_,i)=>{const date=dayOffset(i-6);return {date,steps:stepsFor(date)}});
+ const avg=Math.round(last7.reduce((sum,x)=>sum+x.steps,0)/7);
+ $('stepsAverage').textContent=avg.toLocaleString('ru-RU')+' шагов/день';
+ $('stepsChart').innerHTML=last7.map(({date,steps})=>`<div class="step-col"><div class="step-count">${steps?Math.round(steps/100)/10+'к':'—'}</div><div class="step-track"><div class="step-fill" style="height:${Math.min(100,steps/target*100)}%"></div></div><div class="step-date">${date.slice(8)}</div></div>`).join('');
+ const dates=recordedStepDates().slice(0,30);
+ $('stepsHistory').innerHTML=dates.length?dates.map(date=>`<div class="listitem row between"><span>${esc(date)}</span><b>${stepsFor(date).toLocaleString('ru-RU')} шагов</b></div>`).join(''):'<p class="muted">Пока нет записей. Добавь шаги за сегодня.</p>';
+}
+$('stepsForm').onsubmit=e=>{
+ e.preventDefault();const date=$('stepDate').value,steps=Number($('stepCount').value);
+ if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||!Number.isInteger(steps)||steps<0||steps>100000){alert('Укажи дату и количество шагов от 0 до 100 000.');return}
+ state.dailySteps=state.dailySteps.filter(x=>x.date!==date);
+ state.dailySteps.push({date,steps});
+ save();$('stepCount').value='';
+};
+$('stepDate').onchange=()=>renderSteps();
+$('stepsClear').onclick=()=>{
+ const date=$('stepDate').value;
+ if(!confirm('Сбросить шаги за '+date+'? Записи веса не изменятся.'))return;
+ state.dailySteps=state.dailySteps.filter(x=>x.date!==date);
+ state.dailySteps.push({date,steps:0});save();
+};
 function todayFoods(){return state.foods.filter(f=>f.date===today())}
 function totals(){return todayFoods().reduce((a,f)=>({kcal:a.kcal+f.kcal,p:a.p+f.p,f:a.f+f.f,c:a.c+f.c}),{kcal:0,p:0,f:0,c:0})}
 function renderHome(){
@@ -61,9 +100,11 @@ function renderHome(){
  $('macroStats').innerHTML=metrics.map(([n,v,g,u])=>`<div class="stat"><div class="sub">${n}</div><div class="metric">${v}<small> / ${g} ${u}</small></div><div class="bar"><i style="width:${Math.min(100,g?v/g*100:0)}%"></i></div></div>`).join('');
  const latest=[...state.weights].sort((a,b)=>a.date.localeCompare(b.date));drawChart(latest);
  if(latest.length>1){let d=latest[latest.length-1].weight-latest[0].weight;$('weightDelta').textContent=(d>0?'+':'')+d.toFixed(1)+' кг';}else $('weightDelta').textContent='Добавь записи';
- const todaySteps=state.weights.find(w=>w.date===today())?.steps||0;
+ const todaySteps=stepsFor(today());
  const checks=[['Питание',todayFoods().length>0],['Тренировка',!!state.completed[today()]],['Шаги',todaySteps>=state.profile.steps]];
  $('todayChecklist').innerHTML=checks.map(([n,v])=>`<div class="listitem row between"><span>${n}</span><span class="${v?'good':'muted'}">${v?'✓ отмечено':'не отмечено'}</span></div>`).join('');
+ $('homeStepSummary').textContent=todaySteps.toLocaleString('ru-RU')+' / '+(Number(p.steps)||8000).toLocaleString('ru-RU')+' шагов';
+ $('homeStepProgress').style.width=Math.min(100,todaySteps/Math.max(1,Number(p.steps)||8000)*100)+'%';
  $('dayBar').style.width=(checks.filter(x=>x[1]).length/checks.length*100)+'%';$('dayProgress').textContent=`${checks.filter(x=>x[1]).length} из ${checks.length} привычек отмечено`;
  const rate=latest.length>=8?(latest.slice(-7).reduce((a,x)=>a+x.weight,0)/Math.min(7,latest.length)-latest.slice(-14,-7).reduce((a,x)=>a+x.weight,0)/Math.max(1,Math.min(7,latest.slice(-14,-7).length))):null;
  let msg='Веди вес регулярно и оценивай среднее за 7 дней. Пока не меняй калории из-за одного взвешивания.';
@@ -73,7 +114,7 @@ function renderHome(){
  $('recommendation').innerHTML=`<p>${esc(msg)}</p><p class="small muted">Коррекция калорий — только после 2–3 недель устойчивых данных о среднем весе, талии и соблюдении плана. Это ориентир, не медицинская рекомендация.</p>`;
 }
 function drawChart(data){let el=$('weightChart');if(!data.length){el.textContent='Добавь вес, чтобы увидеть график';return}let pts=data.slice(-14), vals=pts.map(x=>x.weight),min=Math.min(...vals)-.5,max=Math.max(...vals)+.5,range=max-min||1;let coords=vals.map((v,i)=>`${10+i*(280/Math.max(1,vals.length-1))},${150-(v-min)/range*120}`).join(' ');el.innerHTML=`<svg viewBox="0 0 300 170" role="img" aria-label="График веса"><line x1="8" y1="150" x2="292" y2="150" stroke="#284057"/><polyline points="${coords}" fill="none" stroke="#35d6a0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>${vals.map((v,i)=>`<circle cx="${10+i*(280/Math.max(1,vals.length-1))}" cy="${150-(v-min)/range*120}" r="3.5" fill="#35d6a0"/>`).join('')}<text x="8" y="13" fill="#91a6bc" font-size="10">${max.toFixed(1)} кг</text><text x="8" y="166" fill="#91a6bc" font-size="10">${esc(pts[0].date.slice(5))}</text><text x="255" y="166" fill="#91a6bc" font-size="10">${esc(pts[pts.length-1].date.slice(5))}</text></svg>`}
-function renderWeights(){ $('wDate').value ||= today();$('wWeight').value=state.profile.weight??'';$('wSteps').value=state.weights.find(w=>w.date===today())?.steps??'';
+function renderWeights(){ $('wDate').value ||= today();$('wWeight').value=state.profile.weight??'';$('wSteps').value=stepsFor(today())||'';
  const arr=[...state.weights].sort((a,b)=>b.date.localeCompare(a.date));$('weightHistory').innerHTML=arr.length?arr.map((x,i)=>`<div class="listitem row between"><div><b>${esc(x.date)}</b><div class="sub">${x.waist?`Талия ${x.waist} см · `:''}${x.steps?x.steps+' шагов':''}</div></div><div class="row"><b>${x.weight} кг</b><button class="danger" data-delweight="${i}">×</button></div></div>`).join(''):'<p class="muted">Записей пока нет.</p>';
  $('weightHistory').querySelectorAll('[data-delweight]').forEach(b=>b.onclick=()=>{let x=arr[+b.dataset.delweight];state.weights=state.weights.filter(w=>w!==x);save()});
 }
@@ -107,8 +148,8 @@ function renderSettings(){
  $('pullCloud').disabled=!session||cloudBusy;
  $('importGuest').disabled=!session||cloudBusy;
 }
-function renderAll(){renderHome();renderWeights();renderTraining();renderFood();renderShopping();renderSettings()}
-$('weightForm').onsubmit=e=>{e.preventDefault();let entry={date:$('wDate').value,weight:+$('wWeight').value,waist:+$('wWaist').value||null,steps:+$('wSteps').value||null};state.weights=state.weights.filter(x=>x.date!==entry.date);state.weights.push(entry);state.profile.weight=entry.weight;save();e.target.reset();$('wDate').value=today();};
+function renderAll(){renderHome();renderWeights();renderTraining();renderFood();renderShopping();renderSteps();renderSettings()}
+$('weightForm').onsubmit=e=>{e.preventDefault();let entry={date:$('wDate').value,weight:+$('wWeight').value,waist:+$('wWaist').value||null,steps:+$('wSteps').value||null};state.weights=state.weights.filter(x=>x.date!==entry.date);state.weights.push(entry);state.profile.weight=entry.weight;if($('wSteps').value!==''){state.dailySteps=state.dailySteps.filter(x=>x.date!==entry.date);state.dailySteps.push({date:entry.date,steps:entry.steps||0})}save();e.target.reset();$('wDate').value=today();};
 $('foodForm').onsubmit=e=>{e.preventDefault();let f=allFoods().find(x=>x.id===$('foodSelect').value);if(!f)return;let n=+$('foodServings').value;state.foods.push({id:uid(),date:today(),name:f.name,meal:$('mealType').value,kcal:f.kcal*n,p:f.p*n,f:f.f*n,c:f.c*n});save();};
 $('customFoodForm').onsubmit=e=>{e.preventDefault();state.customFoods.push({name:$('customName').value,kcal:+$('customKcal').value,p:+$('customP').value,f:+$('customF').value,c:+$('customC').value,min:0,ingredients:[],steps:'Пользовательское блюдо'});save();e.target.reset()};
 $('clearFood').onclick=()=>{if(confirm('Удалить записи питания за сегодня?')){state.foods=state.foods.filter(f=>f.date!==today());save()}};
@@ -119,7 +160,17 @@ $('exportData').onclick=()=>{let a=document.createElement('a'),url=URL.createObj
 $('importData').onchange=async e=>{try{let d=JSON.parse(await e.target.files[0].text());if(!d.profile||!d.weights)throw Error();if(!confirm('Импорт заменит текущие данные этого профиля. Продолжить?'))return;state=cleanData(d);save();alert('Данные импортированы')}catch{alert('Не удалось импортировать файл JSON')}};
 $('resetData').onclick=()=>{if(confirm('Точно удалить все локальные данные? Сначала сделай экспорт.')){state=cleanData(null);save()}};
 function getConfig(){try{const c=JSON.parse(localStorage.getItem(CONFIG_KEY)||'{}');return {url:c.url||'',key:c.key||''}}catch{return {url:'',key:''}}}
-function validConfig(url,key){try{const u=new URL(url);return u.protocol==='https:'&&(/(^|\.)supabase\.co$/.test(u.hostname)||u.hostname==='localhost')&&key.length>15}catch{return false}}
+function validConfig(url,key){
+ try{
+  const u=new URL(url);
+  if(u.protocol!=='https:'||!/(^|\.)supabase\.co$/.test(u.hostname)||key.length<16||key.startsWith('sb_secret_')||key==='service_role')return false;
+  if(key.startsWith('eyJ')){
+   const payload=JSON.parse(atob(key.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
+   if(payload.role==='service_role')return false;
+  }
+  return true;
+ }catch{return false}
+}
 function setMessage(message){cloudMessage=message;renderSettings()}
 async function setupCloud(config){
  if(!window.supabase){setMessage('Не загрузилась библиотека Supabase. Проверь интернет.');return false}
@@ -192,10 +243,11 @@ async function uploadPending(){
 async function pullCloud(){
  if(!sb||!session||cloudBusy)return;
  if(localPending()&&!confirm('Внимание: несинхронизированные локальные изменения будут заменены облачными. Сначала экспортируй JSON. Продолжить?'))return;
- const id=activeUserId,epoch=authEpoch;cloudBusy=true;renderSettings();
+ const id=activeUserId,epoch=authEpoch,initialLocal=JSON.stringify(publicData());cloudBusy=true;renderSettings();
  try{
   const {data,error}=await sb.from('user_data').select('data,revision').eq('user_id',id).maybeSingle();
   if(error)throw error;if(epoch!==authEpoch||activeUserId!==id)return;
+  if(JSON.stringify(publicData())!==initialLocal){setMessage('Во время загрузки появились новые локальные изменения. Загрузка отменена, данные сохранены.');return}
   if(!data){setMessage('В облаке ещё нет записей для этого аккаунта. Локальные данные не изменены.');return}
   // Keep a local recovery copy, even when the user opts to replace local data.
   localStorage.setItem(`betteryou-recovery-${id}`,JSON.stringify(publicData()));
