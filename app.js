@@ -5,7 +5,7 @@ const defaultState={
  profile:{age:null,height:null,weight:null,sex:'',calories:2000,protein:100,fat:65,steps:8000},
  weights:[],
  dailySteps:[],
- foods:[],customFoods:[],barcodeFoods:[],favoriteFoods:[],shopping:[],lifts:[],completed:{},
+ foods:[],customFoods:[],barcodeFoods:[],personalFoods:[],favoriteFoods:[],shopping:[],lifts:[],completed:{},
  workouts:[
  {name:'День 1 · Грудь + руки',day:'Пн',items:[['Жим гантелей лёжа','Грудь',3,'8–12'],['Жим гантелей на наклонной скамье','Грудь',3,'8–12'],['Сведение рук в кроссовере','Грудь',2,'12–15'],['Сгибание рук с гантелями','Бицепс',3,'8–12'],['Сгибание на скамье Скотта или на блоке','Бицепс',2,'10–15'],['Разгибание рук на блоке с канатом','Трицепс',3,'10–15'],['Разгибание рук над головой на блоке','Трицепс',2,'10–15']]},
  {name:'День 2 · Спина + плечи',day:'Ср',items:[['Тяга верхнего блока','Спина',3,'8–12'],['Тяга с упором грудью','Спина',3,'8–12'],['Пуловер на верхнем блоке','Спина',2,'12–15'],['Жим гантелей сидя','Плечи',3,'8–12'],['Подъёмы гантелей в стороны','Плечи',3,'12–20'],['Обратная бабочка','Задняя дельта',3,'12–15'],['Face pull','Задняя дельта',2,'12–20']]},
@@ -25,7 +25,7 @@ const CONFIG_KEY='betteryou-supabase-config-v2';
 const userKey=id=>`betteryou-user-${id}`;
 const pendingKey=id=>`betteryou-pending-${id}`;
 const versionKey=id=>`betteryou-version-${id}`;
-const dataFields=['profile','weights','dailySteps','foods','customFoods','barcodeFoods','favoriteFoods','shopping','lifts','completed','workouts','recipes'];
+const dataFields=['profile','weights','dailySteps','foods','customFoods','barcodeFoods','personalFoods','favoriteFoods','shopping','lifts','completed','workouts','recipes'];
 function cleanData(d){
  const result=structuredClone(defaultState);
  if(!d||typeof d!=='object'||Array.isArray(d))return result;
@@ -120,9 +120,47 @@ function renderWeights(){ $('wDate').value ||= today();$('wWeight').value=state.
  const arr=[...state.weights].sort((a,b)=>b.date.localeCompare(a.date));$('weightHistory').innerHTML=arr.length?arr.map((x,i)=>`<div class="listitem row between"><div><b>${esc(x.date)}</b><div class="sub">${x.waist?`Талия ${x.waist} см · `:''}${x.steps?x.steps+' шагов':''}</div></div><div class="row"><b>${x.weight} кг</b><button class="danger" data-delweight="${i}">×</button></div></div>`).join(''):'<p class="muted">Записей пока нет.</p>';
  $('weightHistory').querySelectorAll('[data-delweight]').forEach(b=>b.onclick=()=>{let x=arr[+b.dataset.delweight];state.weights=state.weights.filter(w=>w!==x);save()});
 }
-function renderTraining(){ $('workoutPicker').innerHTML=state.workouts.map((w,i)=>`<button class="${i===activeWorkout?'':'secondary'}" data-w="${i}">${esc(w.name)} <span class="small">· ${w.items.length} упражн.</span></button>`).join('');
+// BetterYou 2.6: training place and muscle-building starter. Old workout records remain untouched.
+const HOME_WORKOUTS=[
+ {name:'Дом · Верх тела',day:'Пн',items:[['Отжимания от опоры','Грудь',3,'6–12'],['Тяга резинки к поясу','Спина',3,'10–15'],['Жим гантелей стоя','Плечи',2,'8–12'],['Сгибание рук с гантелями','Бицепс',2,'10–15']]},
+ {name:'Дом · Низ тела',day:'Ср',items:[['Приседание до стула','Ноги',3,'8–12'],['Ягодичный мост','Ягодицы',3,'10–15'],['Румынская тяга с гантелями','Задняя поверхность бедра',2,'8–12'],['Подъёмы на носки стоя','Икры',3,'12–20']]},
+ {name:'Дом · Всё тело',day:'Пт',items:[['Отжимания от опоры','Грудь',2,'6–12'],['Тяга резинки к поясу','Спина',3,'10–15'],['Приседание до стула','Ноги',2,'8–12'],['Планка','Пресс',2,'20–40 сек']]}
+];
+const EXERCISE_TIPS={
+ 'Жим гантелей лёжа':'Лопатки стабилизированы, стопы на полу, опускай гантели плавно без резких движений.',
+ 'Жим гантелей на наклонной скамье':'Контролируй опускание и сохраняй запястья над предплечьями.',
+ 'Сведение рук в кроссовере':'Сохраняй небольшой сгиб локтей и не тяни вес рывком.',
+ 'Тяга верхнего блока':'Опускай рукоять к верхней части груди, не отклоняйся резко назад.',
+ 'Тяга с упором грудью':'Сохраняй грудь на опоре и веди локти назад без рывка.',
+ 'Жим гантелей сидя':'Держи корпус устойчивым, не переразгибай поясницу.',
+ 'Подъёмы гантелей в стороны':'Используй лёгкий вес и контролируй подъём, без раскачивания.',
+ 'Румынская тяга с гантелями':'Отводи таз назад с нейтральной спиной, двигайся в комфортной амплитуде.',
+ 'Планка':'Удерживай корпус устойчивым, не проваливай поясницу.',
+ 'Отжимания от опоры':'Начни с высокой устойчивой опоры, держи корпус прямым.',
+ 'Тяга резинки к поясу':'Зафиксируй резинку надёжно, своди лопатки без рывка.',
+ 'Приседание до стула':'Опускайся на устойчивый стул в комфортной амплитуде без боли.',
+ 'Ягодичный мост':'Поднимай таз за счёт ягодиц, без сильного прогиба поясницы.',
+ 'Жим гантелей стоя':'Стой устойчиво, избегай прогиба поясницы.',
+ 'Подъёмы на носки стоя':'Поднимай и опускай пятки плавно, держись за опору.'
+};
+function activeWorkouts(){
+ const base=state.profile.trainingPlace==='home'?HOME_WORKOUTS:state.workouts;
+ if(state.profile.trainingGoal!=='general')return base;
+ return base.map(w=>({...w,name:w.name+' · Общая форма',items:w.items.map(it=>[it[0],it[1],Math.max(2,(Number(it[2])||2)-1),it[3]])}));
+}
+function workoutVideoSearch(name){return 'https://www.youtube.com/results?search_query='+encodeURIComponent(name+' техника упражнения тренер')}
+function updateTrainingChoiceUI(){
+ const mode=state.profile.trainingPlace==='home'?'home':'gym';
+ $('trainingPlace').value=mode;
+ $('trainingGoal').value=state.profile.trainingGoal==='general'?'general':'muscle';
+ $('trainingModeSummary').textContent=(mode==='gym'?'Программа для зала':'Программа для дома')+(state.profile.trainingGoal==='general'?' · облегчённый объём':' · набор мышечной массы');
+}
+$('trainingPlace').onchange=()=>{state.profile.trainingPlace=$('trainingPlace').value;activeWorkout=0;save()};
+$('trainingGoal').onchange=()=>{state.profile.trainingGoal=$('trainingGoal').value;save()};
+
+function renderTraining(){ updateTrainingChoiceUI();const workouts=activeWorkouts();activeWorkout=Math.min(activeWorkout,Math.max(0,workouts.length-1)); $('workoutPicker').innerHTML=workouts.map((w,i)=>`<button class="${i===activeWorkout?'':'secondary'}" data-w="${i}">${esc(w.name)} <span class="small">· ${w.items.length} упражн.</span></button>`).join('');
  $('workoutPicker').querySelectorAll('[data-w]').forEach(b=>b.onclick=()=>{activeWorkout=+b.dataset.w;renderTraining()});
- let w=state.workouts[activeWorkout];$('workoutDetails').innerHTML=`<h2>${esc(w.name)}</h2><p class="sub">Отдых 2–3 мин в базовых движениях, 60–120 сек в изоляции. Оставляй 1–3 повтора в запасе.</p>`+w.items.map((it,i)=>`<div class="listitem"><b>${esc(it[0])}</b><div class="sub">${esc(it[1])} · ${it[2]} подхода × ${esc(it[3])}</div><form class="fields three liftform" data-ex="${esc(it[0])}"><div><label>Вес, кг</label><input name="weight" type="number" min="0" step=".5" placeholder="—"></div><div><label>Повторения</label><input name="reps" type="number" min="0" step="1" placeholder="напр. 10"></div><div><label>Подход</label><select name="set">${Array.from({length:it[2]},(_,j)=>`<option>${j+1}</option>`).join('')}</select></div><button class="secondary" style="grid-column:1/-1">Записать подход</button></form></div>`).join('');
+ let w=workouts[activeWorkout];$('workoutDetails').innerHTML=`<h2>${esc(w.name)}</h2><p class="sub">Отдых 2–3 мин в базовых движениях, 60–120 сек в изоляции. Оставляй 1–3 повтора в запасе.</p>`+w.items.map((it,i)=>`<div class="listitem"><b>${esc(it[0])}</b><div class="sub">${esc(it[1])} · ${it[2]} подхода × ${esc(it[3])}</div><p class="small muted">${esc(EXERCISE_TIPS[it[0]]||'Выбери комфортную нагрузку, контролируй движение и не работай через боль.')}</p><a class="exercise-video" href="${esc(workoutVideoSearch(it[0]))}" target="_blank" rel="noopener noreferrer">▶ Найти видео техники ↗</a><form class="fields three liftform" data-ex="${esc(it[0])}"><div><label>Вес, кг</label><input name="weight" type="number" min="0" step=".5" placeholder="—"></div><div><label>Повторения</label><input name="reps" type="number" min="0" step="1" placeholder="напр. 10"></div><div><label>Подход</label><select name="set">${Array.from({length:it[2]},(_,j)=>`<option>${j+1}</option>`).join('')}</select></div><button class="secondary" style="grid-column:1/-1">Записать подход</button></form></div>`).join('');
  document.querySelectorAll('.liftform').forEach(f=>f.onsubmit=e=>{e.preventDefault();let d=new FormData(f);state.lifts.unshift({date:today(),workout:w.name,exercise:f.dataset.ex,weight:+d.get('weight')||0,reps:+d.get('reps')||0,set:+d.get('set')});save();});
  const hist=state.lifts.slice(0,12);$('liftHistory').innerHTML=hist.length?hist.map(l=>`<div class="listitem row between"><div><b>${esc(l.exercise)}</b><div class="sub">${esc(l.date)} · ${esc(l.workout)} · подход ${l.set}</div></div><b>${l.weight} кг × ${l.reps}</b></div>`).join(''):'<p class="muted">Запиши первый подход, чтобы начать журнал.</p>';
 }
@@ -210,7 +248,14 @@ const FOOD_REFERENCE = [
  ["Вода", 0, 0, 0, 0, "Напитки"]
 ];
 const foodCatalog = FOOD_REFERENCE.map(([name,kcal,p,f,c,category],i)=>({id:'db'+i,name,kcal,p,f,c,category,unit:'g',base:100}));
-function allFoods(){return [ ...foodCatalog, ...(state.barcodeFoods||[]).map(f=>({...f,id:'bc'+f.barcode,unit:'g',base:100,category:'Штрихкоды'})), ...state.recipes.map((r,i)=>({...r,id:'r'+i,unit:'portion',base:1,category:'Рецепты'})), ...state.customFoods.map((r,i)=>({...r,id:'c'+i,unit:'portion',base:1,category:'Мои блюда'})) ]}
+function allFoods(){
+ const own=(state.personalFoods||[]).filter(f=>f&&f.id&&typeof f.name==='string').map(f=>({...f,unit:'g',base:100,category:'Мои продукты'}));
+ const ownCodes=new Set(own.map(f=>f.barcode).filter(Boolean));
+ return [ ...own, ...foodCatalog,
+  ...(state.barcodeFoods||[]).filter(f=>!ownCodes.has(f.barcode)).map(f=>({...f,id:'bc'+f.barcode,unit:'g',base:100,category:'Штрихкоды'})),
+  ...state.recipes.map((r,i)=>({...r,id:'r'+i,unit:'portion',base:1,category:'Рецепты'})),
+  ...state.customFoods.map((r,i)=>({...r,id:'c'+i,unit:'portion',base:1,category:'Мои блюда'})) ];
+}
 function selectedFoodDate(){return $('foodDate').value||today()}
 function foodEntry(item,amount,date,meal){
  const factor=amount/item.base;
@@ -254,6 +299,7 @@ function renderFood(){
  $('foodDiary').querySelectorAll('[data-food]').forEach(b=>b.onclick=()=>{if(!confirm('Удалить эту запись из дневника?'))return;state.foods=state.foods.filter(f=>f.id!==b.dataset.food);save()});
  $('recipes').innerHTML=state.recipes.map((r,i)=>`<article class="recipe"><div class="foodimg">${['🍗','🍝','🥣','🐟','🫐','🥩'][i%6]}</div><h3>${esc(r.name)}</h3><p>${r.kcal} ккал · Б ${r.p} г · ${r.min} мин</p><details><summary>Ингредиенты и рецепт</summary><p><b>Ингредиенты</b><br>${r.ingredients.map(esc).join('<br>')}</p><p>${esc(r.steps)}</p></details><button class="secondary" style="width:100%;margin-top:10px" data-addrecipe="${i}">Добавить порцию</button></article>`).join('');
  $('recipes').querySelectorAll('[data-addrecipe]').forEach(b=>b.onclick=()=>{const r=state.recipes[+b.dataset.addrecipe];state.foods.push(foodEntry({...r,id:'r'+b.dataset.addrecipe,base:1,unit:'portion'},1,date,'Перекус'));save()});
+ renderPersonalFoods();
 }
 $('foodSearch').addEventListener('input',renderFoodOptions);
 $('foodFavoritesOnly').addEventListener('change',renderFoodOptions);
@@ -269,7 +315,7 @@ $('foodFavorite').onclick=()=>{
 // BetterYou 2.5: barcode scanning is optional; manual barcode entry is always available.
 // Remote records are reviewed before becoming an editable per-100g product.
 let barcodeScanner=null,barcodeScannerStarted=false,barcodeScannerStarting=false,barcodeScanHandled=false,barcodeStopAfterStart=false,barcodeScannedCode='';
-let barcodePendingCode='',barcodeRequestNumber=0;
+let barcodePendingCode='',barcodeRequestNumber=0,barcodePhotoReading=false;
 const BARCODE_API='https://world.openfoodfacts.org/api/v2/product/';
 function validBarcode(code){return /^\d{8,14}$/.test(String(code||'').trim())}
 function barcodeStatus(message,bad=false){
@@ -299,11 +345,11 @@ function showBarcodeReview(product,source='Open Food Facts'){
  barcodeStatus(missing.length?'Продукт найден, но некоторые данные отсутствуют. Введи значения с этикетки.':'Продукт найден! Проверь данные с упаковкой и сохрани.');
 }
 function chooseSavedBarcode(code){
- const item=(state.barcodeFoods||[]).find(f=>f.barcode===code);
+ const item=(state.personalFoods||[]).find(f=>f.barcode===code)||(state.barcodeFoods||[]).find(f=>f.barcode===code);
  if(!item)return false;
  $('foodFavoritesOnly').checked=false;
  $('foodSearch').value=item.name;
- renderFoodOptions();$('foodSelect').value='bc'+code;
+ renderFoodOptions();$('foodSelect').value=item.id||'bc'+code;
  $('foodServings').value='100';$('foodServings').dataset.unit='g';updateFoodSelection();
  return true;
 }
@@ -331,6 +377,14 @@ async function lookupBarcode(raw){
   barcodeStatus('Не удалось получить данные (интернет, сервис или ограничение API). Можно ввести их с упаковки вручную.',true);
  }finally{clearTimeout(timer)}
 }
+$('barcodeNameFallback').onclick=()=>{
+ // Fresh produce often has no consumer barcode; our offline food database already has fruit and vegetables.
+ void stopBarcodeCamera();
+ go('food');
+ const search=$('foodSearch');
+ search.focus();search.scrollIntoView({behavior:'smooth',block:'center'});
+ barcodeStatus('Ищи продукт по названию в поле ниже (например, «виноград»), затем укажи граммы. Для весовых товаров штрихкод не нужен.');
+};
 $('barcodeLookupForm').onsubmit=e=>{e.preventDefault();lookupBarcode($('barcodeInput').value)};
 $('barcodeReviewForm').onsubmit=e=>{
  e.preventDefault();
@@ -385,9 +439,9 @@ $('scanBarcodeStart').onclick=async()=>{
   if(barcodeScanHandled)return;
   const F=window.Html5QrcodeSupportedFormats||{};
   const formats=[F.EAN_13,F.EAN_8,F.UPC_A,F.UPC_E,F.CODE_128].filter(x=>x!==undefined);
-  const scanner=new window.Html5Qrcode('barcodeScannerView',formats.length?{formatsToSupport:formats}:{});
+  const scanner=new window.Html5Qrcode('barcodeScannerView',formats.length?{formatsToSupport:formats,useBarCodeDetectorIfSupported:true}:{useBarCodeDetectorIfSupported:true});
   barcodeScanner=scanner;
-  await scanner.start({facingMode:'environment'},{fps:8,qrbox:(w,h)=>({width:Math.max(120,Math.min(280,Math.floor(w*.85))),height:Math.max(80,Math.min(130,Math.floor(h*.7)))})},code=>{
+  await scanner.start({facingMode:'environment'},{fps:12,qrbox:(w,h)=>({width:Math.min(360,Math.max(120,Math.floor(w*.94))),height:Math.min(165,Math.max(80,Math.floor(h*.48)))})},code=>{
    if(barcodeScanHandled||!validBarcode(code))return;
    barcodeScanHandled=true;barcodeScannedCode=code;
    if(barcodeScannerStarted)void stopBarcodeCamera().then(()=>lookupBarcode(code));
@@ -402,8 +456,101 @@ $('scanBarcodeStart').onclick=async()=>{
   barcodeStatus('Камеру запустить не удалось. Введи штрихкод вручную — поиск работает и без камеры.',true);
  }finally{barcodeScannerStarting=false;$('scanBarcodeStart').disabled=false}
 };
+// Still photos allow the user to tap-focus on a barcode when live camera decoding is difficult.
+$('scanBarcodePhoto').onclick=()=>{$('scanBarcodeFile').click()};
+$('scanBarcodeFile').onchange=async()=>{
+ const input=$('scanBarcodeFile'),file=input.files&&input.files[0];
+ if(!file||barcodePhotoReading)return;
+ barcodePhotoReading=true;$('scanBarcodePhoto').disabled=true;
+ let scanner=null;
+ try{
+  await stopBarcodeCamera();
+  barcodeStatus('Распознаём штрихкод на фотографии…');
+  await loadBarcodeLibrary();
+  scanner=new window.Html5Qrcode('barcodePhotoView');
+  // scanFile scans the supplied image, does not send it to Open Food Facts.
+  const raw=await scanner.scanFile(file,false);
+  const code=String(raw||'').trim();
+  if(!validBarcode(code))throw new Error('invalid code');
+  $('barcodeInput').value=code;
+  barcodeStatus('Штрихкод распознан с фото. Ищем продукт…');
+  await lookupBarcode(code);
+ }catch(e){barcodeStatus('На фото не удалось распознать штрихкод. Сфотографируй полоски чётко при хорошем свете или введи цифры вручную.',true)}
+ finally{
+  if(scanner)try{scanner.clear()}catch{}
+  input.value='';barcodePhotoReading=false;$('scanBarcodePhoto').disabled=false;
+ }
+};
 $('scanBarcodeStop').onclick=()=>{void stopBarcodeCamera().then(()=>barcodeStatus('Камера остановлена. Можешь ввести код вручную.'))};
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&barcodeScanner)void stopBarcodeCamera()});
+
+// BetterYou 2.6: per-user private food catalogue, stored in existing cloud user_data snapshot.
+// Journal entries preserve their nutrition snapshot if a source food changes or is deleted.
+let editingPersonalFoodId=null;
+function foodNumber(value,limit){
+ const n=Number(value);return Number.isFinite(n)&&n>=0&&n<=limit?n:null;
+}
+function renderPersonalFoods(){
+ const list=$('personalFoodList');if(!list)return;
+ const items=[...(state.personalFoods||[]).map(f=>({...f,origin:'personal'})),...(state.barcodeFoods||[]).map(f=>({...f,id:'bc'+f.barcode,origin:'barcode'}))];
+ list.innerHTML=items.length?items.map(f=>`<div class="listitem personal-food-row"><div><b>${esc(f.name)}</b><div class="sub">${Math.round(f.kcal)} ккал · Б ${f.p} / Ж ${f.f} / У ${f.c} на 100 г${f.barcode?' · код '+esc(f.barcode):''}</div></div><div class="row"><button type="button" class="secondary" data-edit-food="${esc(f.id)}">Изменить</button><button type="button" class="danger" data-delete-food="${esc(f.id)}">Удалить</button></div></div>`).join(''):'<p class="muted">Здесь появятся продукты, которые ты добавишь самостоятельно или сохранишь после сканирования.</p>';
+ list.querySelectorAll('[data-edit-food]').forEach(b=>b.onclick=()=>openPersonalFoodEditor(b.dataset.editFood));
+ list.querySelectorAll('[data-delete-food]').forEach(b=>b.onclick=()=>deletePersonalFood(b.dataset.deleteFood));
+}
+function findManagedFood(id){
+ if(id.startsWith('bc'))return (state.barcodeFoods||[]).find(f=>'bc'+f.barcode===id)||null;
+ return (state.personalFoods||[]).find(f=>f.id===id)||null;
+}
+function openPersonalFoodEditor(id=null){
+ const item=id?findManagedFood(id):null;
+ if(id&&!item)return;
+ editingPersonalFoodId=id;
+ $('personalFoodTitle').textContent=id?'Изменить продукт':'Новый продукт';
+ $('personalName').value=item?.name||'';
+ $('personalBarcode').value=item?.barcode||'';
+ for(const [el,key] of [['personalKcal','kcal'],['personalProtein','p'],['personalFat','f'],['personalCarbs','c']])$(el).value=item?.[key]??'';
+ $('personalFoodEditor').hidden=false;
+ $('personalFoodEditor').scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+function resetPersonalFoodEditor(){
+ editingPersonalFoodId=null;$('personalFoodEditor').hidden=true;$('personalFoodForm').reset();
+}
+$('addPersonalFood').onclick=()=>openPersonalFoodEditor();
+$('cancelPersonalFood').onclick=resetPersonalFoodEditor;
+$('personalFoodForm').onsubmit=e=>{
+ e.preventDefault();
+ const name=$('personalName').value.trim(), barcode=$('personalBarcode').value.trim();
+ const vals=[foodNumber($('personalKcal').value,1000),foodNumber($('personalProtein').value,100),foodNumber($('personalFat').value,100),foodNumber($('personalCarbs').value,100)];
+ if(!name||name.length>120||vals.some(x=>x===null)||[...['personalKcal','personalProtein','personalFat','personalCarbs']].some(id=>String($(id).value).trim()==='')){alert('Проверь название и значения на 100 г.');return}
+ if(barcode&&!validBarcode(barcode)){alert('Штрихкод должен содержать 8–14 цифр, либо оставь поле пустым.');return}
+ const original=editingPersonalFoodId?findManagedFood(editingPersonalFoodId):null;
+ if(editingPersonalFoodId&&!original){alert('Продукт больше не найден. Обнови страницу.');return}
+ const id=original?.id||('pf'+uid());
+ const existing=allFoods().some(f=>f.barcode&&f.barcode===barcode&&f.id!==id);
+ if(barcode&&existing&&!confirm('Такой штрихкод уже есть в базе. Сохранить новый вариант с тем же кодом?'))return;
+ const entry={id,name:name.slice(0,120),barcode,kcal:vals[0],p:vals[1],f:vals[2],c:vals[3]};
+ if(original&&editingPersonalFoodId.startsWith('bc')){
+  const index=state.barcodeFoods.findIndex(f=>'bc'+f.barcode===editingPersonalFoodId);
+  if(index<0)return;
+  // For legacy barcode foods, move the edited version into personalFoods, and update favorites.
+  state.barcodeFoods.splice(index,1);
+  state.favoriteFoods=state.favoriteFoods.map(x=>x===editingPersonalFoodId?id:x);
+ }else if(original){state.personalFoods=state.personalFoods.filter(f=>f.id!==id)}
+ if((state.personalFoods||[]).length>=500&&!original){alert('Достигнут лимит 500 личных продуктов.');return}
+ state.personalFoods=[...(state.personalFoods||[]),entry];
+ resetPersonalFoodEditor();save();
+ $('foodFavoritesOnly').checked=false;$('foodSearch').value=entry.name;renderFoodOptions();$('foodSelect').value=entry.id;updateFoodSelection();
+ $('personalFoodMessage').textContent='Продукт сохранён. Он доступен в поиске и синхронизируется с аккаунтом.';
+};
+function deletePersonalFood(id){
+ const source=findManagedFood(id);if(!source)return;
+ if(!confirm('Удалить «'+source.name+'» из личного справочника? Уже записанные приёмы пищи останутся в дневнике.'))return;
+ if(id.startsWith('bc'))state.barcodeFoods=state.barcodeFoods.filter(f=>'bc'+f.barcode!==id);
+ else state.personalFoods=state.personalFoods.filter(f=>f.id!==id);
+ state.favoriteFoods=state.favoriteFoods.filter(x=>x!==id);
+ if(editingPersonalFoodId===id)resetPersonalFoodEditor();
+ save();$('personalFoodMessage').textContent='Продукт удалён из справочника. Записи дневника сохранены.';
+}
 
 function renderShopping(){$('shoppingList').innerHTML=state.shopping.length?state.shopping.map((x,i)=>`<label class="checkrow"><input type="checkbox" data-shop="${i}" ${x.done?'checked':''}><span style="${x.done?'text-decoration:line-through;opacity:.55':''}">${esc(x.name)}</span><span style="margin-left:auto"></span><button type="button" class="danger" data-shopdel="${i}">×</button></label>`).join(''):'<p class="muted">Список пуст. Добавь продукты или сгенерируй список из рецептов.</p>';
  $('shoppingList').querySelectorAll('[data-shop]').forEach(b=>b.onchange=()=>{state.shopping[+b.dataset.shop].done=b.checked;save()});$('shoppingList').querySelectorAll('[data-shopdel]').forEach(b=>b.onclick=()=>{state.shopping.splice(+b.dataset.shopdel,1);save()})}
