@@ -5,7 +5,7 @@ const defaultState={
  profile:{age:null,height:null,weight:null,sex:'',calories:2000,protein:100,fat:65,steps:8000},
  weights:[],
  dailySteps:[],
- foods:[],customFoods:[],favoriteFoods:[],shopping:[],lifts:[],completed:{},
+ foods:[],customFoods:[],barcodeFoods:[],favoriteFoods:[],shopping:[],lifts:[],completed:{},
  workouts:[
  {name:'День 1 · Грудь + руки',day:'Пн',items:[['Жим гантелей лёжа','Грудь',3,'8–12'],['Жим гантелей на наклонной скамье','Грудь',3,'8–12'],['Сведение рук в кроссовере','Грудь',2,'12–15'],['Сгибание рук с гантелями','Бицепс',3,'8–12'],['Сгибание на скамье Скотта или на блоке','Бицепс',2,'10–15'],['Разгибание рук на блоке с канатом','Трицепс',3,'10–15'],['Разгибание рук над головой на блоке','Трицепс',2,'10–15']]},
  {name:'День 2 · Спина + плечи',day:'Ср',items:[['Тяга верхнего блока','Спина',3,'8–12'],['Тяга с упором грудью','Спина',3,'8–12'],['Пуловер на верхнем блоке','Спина',2,'12–15'],['Жим гантелей сидя','Плечи',3,'8–12'],['Подъёмы гантелей в стороны','Плечи',3,'12–20'],['Обратная бабочка','Задняя дельта',3,'12–15'],['Face pull','Задняя дельта',2,'12–20']]},
@@ -25,7 +25,7 @@ const CONFIG_KEY='betteryou-supabase-config-v2';
 const userKey=id=>`betteryou-user-${id}`;
 const pendingKey=id=>`betteryou-pending-${id}`;
 const versionKey=id=>`betteryou-version-${id}`;
-const dataFields=['profile','weights','dailySteps','foods','customFoods','favoriteFoods','shopping','lifts','completed','workouts','recipes'];
+const dataFields=['profile','weights','dailySteps','foods','customFoods','barcodeFoods','favoriteFoods','shopping','lifts','completed','workouts','recipes'];
 function cleanData(d){
  const result=structuredClone(defaultState);
  if(!d||typeof d!=='object'||Array.isArray(d))return result;
@@ -210,7 +210,7 @@ const FOOD_REFERENCE = [
  ["Вода", 0, 0, 0, 0, "Напитки"]
 ];
 const foodCatalog = FOOD_REFERENCE.map(([name,kcal,p,f,c,category],i)=>({id:'db'+i,name,kcal,p,f,c,category,unit:'g',base:100}));
-function allFoods(){return [ ...foodCatalog, ...state.recipes.map((r,i)=>({...r,id:'r'+i,unit:'portion',base:1,category:'Рецепты'})), ...state.customFoods.map((r,i)=>({...r,id:'c'+i,unit:'portion',base:1,category:'Мои блюда'})) ]}
+function allFoods(){return [ ...foodCatalog, ...(state.barcodeFoods||[]).map(f=>({...f,id:'bc'+f.barcode,unit:'g',base:100,category:'Штрихкоды'})), ...state.recipes.map((r,i)=>({...r,id:'r'+i,unit:'portion',base:1,category:'Рецепты'})), ...state.customFoods.map((r,i)=>({...r,id:'c'+i,unit:'portion',base:1,category:'Мои блюда'})) ]}
 function selectedFoodDate(){return $('foodDate').value||today()}
 function foodEntry(item,amount,date,meal){
  const factor=amount/item.base;
@@ -266,6 +266,145 @@ $('foodFavorite').onclick=()=>{
  if(ids.has(id))ids.delete(id);else ids.add(id);
  state.favoriteFoods=Array.from(ids);save();
 };
+// BetterYou 2.5: barcode scanning is optional; manual barcode entry is always available.
+// Remote records are reviewed before becoming an editable per-100g product.
+let barcodeScanner=null,barcodeScannerStarted=false,barcodeScannerStarting=false,barcodeScanHandled=false,barcodeStopAfterStart=false,barcodeScannedCode='';
+let barcodePendingCode='',barcodeRequestNumber=0;
+const BARCODE_API='https://world.openfoodfacts.org/api/v2/product/';
+function validBarcode(code){return /^\d{8,14}$/.test(String(code||'').trim())}
+function barcodeStatus(message,bad=false){
+ const el=$('barcodeStatus');el.textContent=message;el.style.color=bad?'#ffb5ba':'var(--muted)';
+}
+function barcodeValue(value,max){
+ if(value==null||value===''||!Number.isFinite(Number(value)))return '';
+ const n=Number(value);return n>=0&&n<=max?String(Math.round(n*10)/10):'';
+}
+function barcodeProductFromOff(payload,code){
+ if(!payload||Number(payload.status)!==1||!payload.product)return null;
+ const p=payload.product,n=p.nutriments||{};
+ const name=String(p.product_name||p.product_name_en||p.product_name_ru||p.brands||'').trim().slice(0,120);
+ const kcal=n['energy-kcal_100g']??(Number.isFinite(Number(n['energy-kj_100g']))?Number(n['energy-kj_100g'])/4.184:null);
+ return {barcode:code,name,kcal:barcodeValue(kcal,1000),p:barcodeValue(n.proteins_100g,100),f:barcodeValue(n.fat_100g,100),c:barcodeValue(n.carbohydrates_100g,100),quantityUnit:(p.product_quantity_unit==='ml'?'ml':'g'),brands:String(p.brands||'').slice(0,80)};
+}
+function showBarcodeReview(product,source='Open Food Facts'){
+ $('barcodeReviewForm').hidden=false;
+ $('barcodeProductName').value=product.name||'';
+ $('barcodeKcal').value=product.kcal??'';
+ $('barcodeProtein').value=product.p??'';
+ $('barcodeFat').value=product.f??'';
+ $('barcodeCarbs').value=product.c??'';
+ $('barcodeProductInfo').textContent=`Код ${product.barcode} · источник: ${source}. Значения на 100 г; для жидкостей проверь единицы на упаковке.`;
+ barcodePendingCode=product.barcode;
+ const missing=['barcodeProductName','barcodeKcal','barcodeProtein','barcodeFat','barcodeCarbs'].filter(id=>!String($(id).value).trim());
+ barcodeStatus(missing.length?'Продукт найден, но некоторые данные отсутствуют. Введи значения с этикетки.':'Продукт найден! Проверь данные с упаковкой и сохрани.');
+}
+function chooseSavedBarcode(code){
+ const item=(state.barcodeFoods||[]).find(f=>f.barcode===code);
+ if(!item)return false;
+ $('foodFavoritesOnly').checked=false;
+ $('foodSearch').value=item.name;
+ renderFoodOptions();$('foodSelect').value='bc'+code;
+ $('foodServings').value='100';$('foodServings').dataset.unit='g';updateFoodSelection();
+ return true;
+}
+async function lookupBarcode(raw){
+ const code=String(raw||'').trim(),requestNumber=++barcodeRequestNumber;
+ $('barcodeReviewForm').hidden=true;
+ if(!validBarcode(code)){barcodeStatus('Введи штрихкод из 8–14 цифр.',true);return}
+ $('barcodeInput').value=code;
+ if(chooseSavedBarcode(code)){barcodeStatus('Этот продукт уже сохранён. Он выбран в дневнике.');return}
+ barcodeStatus('Ищем продукт в Open Food Facts…');
+ const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),12000);
+ try{
+  const url=BARCODE_API+encodeURIComponent(code)+'.json?fields=code,product_name,product_name_en,product_name_ru,brands,product_quantity_unit,nutriments';
+  const response=await fetch(url,{signal:controller.signal,headers:{Accept:'application/json'},cache:'no-store'});
+  if(requestNumber!==barcodeRequestNumber)return;
+  if(!response.ok)throw new Error('network '+response.status);
+  const payload=await response.json();
+  if(requestNumber!==barcodeRequestNumber)return;
+  const product=barcodeProductFromOff(payload,code);
+  if(!product){showBarcodeReview({barcode:code,name:'',kcal:'',p:'',f:'',c:''},'ручной ввод — в базе не найден');barcodeStatus('В базе продукт не найден. Введи данные с упаковки вручную.');return}
+  showBarcodeReview(product);
+ }catch(err){
+  if(requestNumber!==barcodeRequestNumber)return;
+  showBarcodeReview({barcode:code,name:'',kcal:'',p:'',f:'',c:''},'ручной ввод');
+  barcodeStatus('Не удалось получить данные (интернет, сервис или ограничение API). Можно ввести их с упаковки вручную.',true);
+ }finally{clearTimeout(timer)}
+}
+$('barcodeLookupForm').onsubmit=e=>{e.preventDefault();lookupBarcode($('barcodeInput').value)};
+$('barcodeReviewForm').onsubmit=e=>{
+ e.preventDefault();
+ if(!validBarcode(barcodePendingCode)){barcodeStatus('Неверный штрихкод.',true);return}
+ const name=$('barcodeProductName').value.trim();
+ const ids=['barcodeKcal','barcodeProtein','barcodeFat','barcodeCarbs'];
+ const vals=ids.map(id=>Number($(id).value));
+ if(!name||ids.some(id=>String($(id).value).trim()==='')||vals.some((n,i)=>!Number.isFinite(n)||n<0||n>(i===0?1000:100))){barcodeStatus('Проверь название и все четыре значения на 100 г.',true);return}
+ const [kcal,p,f,c]=vals;
+ const item={barcode:barcodePendingCode,name:name.slice(0,120),kcal,p,f,c};
+ state.barcodeFoods=Array.isArray(state.barcodeFoods)?state.barcodeFoods:[];
+ const ix=state.barcodeFoods.findIndex(f=>f.barcode===barcodePendingCode);
+ if(ix>=0)state.barcodeFoods[ix]=item;
+ else if(state.barcodeFoods.length>=300){barcodeStatus('Лимит 300 сохранённых штрихкодов. Используй поиск по существующим продуктам.',true);return}
+ else state.barcodeFoods.push(item);
+ save();chooseSavedBarcode(barcodePendingCode);
+ $('barcodeReviewForm').hidden=true;
+ barcodeStatus('Продукт сохранён и выбран. Укажи граммы и нажми «Добавить в дневник».');
+};
+function loadBarcodeLibrary(){
+ if(window.Html5Qrcode)return Promise.resolve();
+ return new Promise((resolve,reject)=>{
+  const script=document.createElement('script');
+  script.src='https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js';
+  script.onload=()=>window.Html5Qrcode?resolve():reject(new Error('Library unavailable'));
+  script.onerror=()=>reject(new Error('Network error'));
+  document.head.appendChild(script);
+ });
+}
+async function stopBarcodeCamera(){
+ barcodeScanHandled=true;
+ if(barcodeScannerStarting&&!barcodeScannerStarted){barcodeStopAfterStart=true;$('scanBarcodeStop').hidden=true;return}
+ const scanner=barcodeScanner; barcodeScanner=null;
+ $('scanBarcodeStop').hidden=true;$('scanBarcodeStart').disabled=false;
+ // Hide after stop, so the library can release the camera first.
+ if(scanner){try{if(barcodeScannerStarted)await scanner.stop()}catch{}
+  try{scanner.clear()}catch{}
+ }
+ barcodeScannerStarted=false;barcodeScannerStarting=false;
+ $('barcodeScannerPanel').hidden=true;
+}
+$('scanBarcodeStart').onclick=async()=>{
+ if(barcodeScannerStarting||barcodeScannerStarted)return;
+ barcodeScannerStarting=true;barcodeScanHandled=false;barcodeStopAfterStart=false;barcodeScannedCode='';
+ $('scanBarcodeStart').disabled=true;
+ $('scanBarcodeStop').hidden=false;
+ $('barcodeScannerPanel').hidden=false;
+ barcodeStatus('Запускаем камеру… При запросе Safari разреши доступ.');
+ try{
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)throw new Error('Camera API unavailable');
+  await loadBarcodeLibrary();
+  if(barcodeScanHandled)return;
+  const F=window.Html5QrcodeSupportedFormats||{};
+  const formats=[F.EAN_13,F.EAN_8,F.UPC_A,F.UPC_E,F.CODE_128].filter(x=>x!==undefined);
+  const scanner=new window.Html5Qrcode('barcodeScannerView',formats.length?{formatsToSupport:formats}:{});
+  barcodeScanner=scanner;
+  await scanner.start({facingMode:'environment'},{fps:8,qrbox:(w,h)=>({width:Math.max(120,Math.min(280,Math.floor(w*.85))),height:Math.max(80,Math.min(130,Math.floor(h*.7)))})},code=>{
+   if(barcodeScanHandled||!validBarcode(code))return;
+   barcodeScanHandled=true;barcodeScannedCode=code;
+   if(barcodeScannerStarted)void stopBarcodeCamera().then(()=>lookupBarcode(code));
+  },()=>{});
+  barcodeScannerStarted=true;barcodeScannerStarting=false;
+  if(barcodeScanHandled||barcodeStopAfterStart){
+   const scanned=barcodeScannedCode;await stopBarcodeCamera();
+   if(scanned)await lookupBarcode(scanned);
+  }else barcodeStatus('Наведи камеру на штрихкод упаковки.');
+ }catch(err){
+  barcodeScannerStarting=false;await stopBarcodeCamera();
+  barcodeStatus('Камеру запустить не удалось. Введи штрихкод вручную — поиск работает и без камеры.',true);
+ }finally{barcodeScannerStarting=false;$('scanBarcodeStart').disabled=false}
+};
+$('scanBarcodeStop').onclick=()=>{void stopBarcodeCamera().then(()=>barcodeStatus('Камера остановлена. Можешь ввести код вручную.'))};
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&barcodeScanner)void stopBarcodeCamera()});
+
 function renderShopping(){$('shoppingList').innerHTML=state.shopping.length?state.shopping.map((x,i)=>`<label class="checkrow"><input type="checkbox" data-shop="${i}" ${x.done?'checked':''}><span style="${x.done?'text-decoration:line-through;opacity:.55':''}">${esc(x.name)}</span><span style="margin-left:auto"></span><button type="button" class="danger" data-shopdel="${i}">×</button></label>`).join(''):'<p class="muted">Список пуст. Добавь продукты или сгенерируй список из рецептов.</p>';
  $('shoppingList').querySelectorAll('[data-shop]').forEach(b=>b.onchange=()=>{state.shopping[+b.dataset.shop].done=b.checked;save()});$('shoppingList').querySelectorAll('[data-shopdel]').forEach(b=>b.onclick=()=>{state.shopping.splice(+b.dataset.shopdel,1);save()})}
 function renderSettings(){
