@@ -304,7 +304,7 @@ trainingTimerHandle=setInterval(renderTrainingTimer,1000);
 $('trainingStart').onclick=()=>{applyTrainingMode('session');if(trainingSessionDraft())return alert('Заверши или отмени текущую тренировку.');const d=trainingCurrentDay();state.profile.trainingDraft={id:uid(),date:today(),startedAt:new Date().toISOString(),key:d.key,name:d.name};save()};
 $('trainingFinish').onclick=()=>{const d=trainingSessionDraft();if(!d)return;const sets=state.lifts.filter(x=>x.sessionId===d.id);if(!sets.length&&!confirm('Подходы не записаны. Всё равно завершить тренировку?'))return;
  const duration=Math.max(1,Math.round((Date.now()-new Date(d.startedAt).getTime())/60000));
- state.trainingSessions.unshift({id:d.id,date:today(),name:d.name,sets:sets.length,duration,finishedAt:new Date().toISOString()});delete state.profile.trainingDraft;save()};
+ state.trainingSessions.unshift({id:d.id,date:today(),name:d.name,sets:sets.length,duration,finishedAt:new Date().toISOString()});delete state.profile.trainingDraft;save();applyTrainingMode('progress')};
 $('trainingCancel').onclick=()=>{if(!confirm('Отменить текущее занятие? Уже записанные подходы останутся в журнале.'))return;delete state.profile.trainingDraft;save()};
 $('trainingSetupForm').onsubmit=e=>{
  e.preventDefault();const old=trainingProfile(),p={place:$('tPlace').value,goal:$('tGoal').value,experience:$('tExperience').value,days:Number($('tDays').value),duration:Number($('tDuration').value),equipment:$('tEquipment').value,exclude:['knee','back','shoulder'].filter(tag=>$('tAvoid_'+tag).checked),updatedAt:new Date().toISOString()};
@@ -968,9 +968,13 @@ $('clearFood').onclick=()=>{const date=selectedFoodDate();if(confirm('Удали
 $('shoppingForm').onsubmit=e=>{e.preventDefault();state.shopping.push({name:$('shoppingInput').value.trim(),done:false});save();e.target.reset()};
 $('generateList').onclick=()=>{let ingredients=[...new Set(state.recipes.slice(0,4).flatMap(r=>r.ingredients))];state.shopping.push(...ingredients.map(name=>({name,done:false})));save()};
 $('settingsForm').onsubmit=e=>{e.preventDefault();let p=state.profile;for(let [id,k] of [['sAge','age'],['sHeight','height'],['sWeight','weight'],['sCalories','calories'],['sProtein','protein'],['sFat','fat'],['sSteps','steps']])p[k]=$(id).value===''?null:+$(id).value;p.sex=$('sSex').value;save();alert('Настройки сохранены')};
-$('exportData').onclick=()=>{let a=document.createElement('a'),url=URL.createObjectURL(new Blob([JSON.stringify(publicData(),null,2)],{type:'application/json'}));a.href=url;a.download='betteryou-backup.json';a.click();URL.revokeObjectURL(url)};
-$('importData').onchange=async e=>{try{let d=JSON.parse(await e.target.files[0].text());if(!d.profile||!d.weights)throw Error();if(!confirm('Импорт заменит текущие данные этого профиля. Продолжить?'))return;state=cleanData(d);save();alert('Данные импортированы')}catch{alert('Не удалось импортировать файл JSON')}};
-$('resetData').onclick=()=>{if(confirm('Точно удалить все локальные данные? Сначала сделай экспорт.')){state=cleanData(null);save()}};
+function downloadBackup(data,filename='betteryou-backup.json'){
+ const a=document.createElement('a'),url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
+ a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);
+}
+$('exportData').onclick=()=>downloadBackup(publicData());
+$('importData').onchange=async e=>{try{let d=JSON.parse(await e.target.files[0].text());if(!d.profile||!d.weights)throw Error();if(!confirm('Импорт заменит текущие данные этого профиля. Сначала скачай резервную копию. Продолжить?'))return;downloadBackup(publicData(),'betteryou-before-import.json');state=cleanData(d);save();alert('Данные импортированы')}catch{alert('Не удалось импортировать файл JSON')}};
+$('resetData').onclick=()=>{if(!confirm('Удалить все данные текущего профиля? При синхронизации удаление попадёт и в облако.'))return;downloadBackup(publicData(),'betteryou-before-reset.json');if(!confirm('Резервная копия скачана. Действительно сбросить этот профиль?'))return;state=cleanData(null);save()};
 function getConfig(){try{const c=JSON.parse(localStorage.getItem(CONFIG_KEY)||'{}');return {url:c.url||'',key:c.key||''}}catch{return {url:'',key:''}}}
 function validConfig(url,key){
  try{
@@ -1002,6 +1006,40 @@ async function setupCloud(config){
  }catch(e){setMessage('Не удалось восстановить сессию: '+e.message)}
  return true;
 }
+
+// Check the remote revision when the application becomes active again.
+// Never overwrite local changes that have not been uploaded yet.
+let lastCloudCheckAt=0,checkingCloud=false;
+async function checkCloudUpdates(manual=false){
+ if(!sb||!session||!activeUserId||cloudBusy||checkingCloud)return;
+ if(!manual&&Date.now()-lastCloudCheckAt<45000)return;
+ lastCloudCheckAt=Date.now();checkingCloud=true;
+ const id=activeUserId,epoch=authEpoch,before=JSON.stringify(publicData());
+ if(manual)setMessage('Проверяем данные на другом устройстве…');
+ try{
+  const {data,error}=await sb.from('user_data').select('data,revision').eq('user_id',id).maybeSingle();
+  if(error)throw error;
+  if(epoch!==authEpoch||activeUserId!==id)return;
+  if(before!==JSON.stringify(publicData())){if(manual)setMessage('Пока шла проверка, данные изменились. Запусти проверку ещё раз.');return}
+  const remoteRevision=Number(data?.revision||0);
+  if(remoteRevision!==cloudRevision){
+   if(localPending()){
+    cloudConflict=true;
+    setMessage('Конфликт синхронизации: на этом устройстве и в облаке есть разные изменения. Мы ничего не удалили и остановили отправку. Сначала экспортируй JSON; при восстановлении облачной версии будет создана резервная копия.');
+    return;
+   }
+   if(!data){if(manual)setMessage('Облачная запись не найдена. Локальные данные оставлены без изменений.');return}
+   localStorage.setItem(`betteryou-recovery-${id}`,JSON.stringify(publicData()));
+   state=cleanData(data.data);cloudRevision=remoteRevision;cloudConflict=false;
+   localStorage.setItem(versionKey(id),String(remoteRevision));
+   localStorage.setItem(userKey(id),JSON.stringify(publicData()));
+   cloudMessage='Получены новые записи из облака. ✓';renderAll();return;
+  }
+  if(localPending()&&!cloudConflict){setMessage('Есть записи на этом устройстве. Отправляем их в облако…');scheduleUpload()}
+  else if(manual)setMessage(cloudConflict?'Конфликт: сначала сохрани обе версии перед восстановлением.':'Всё актуально. Облачная версия совпадает с данными на устройстве. ✓');
+ }catch(err){if(manual)setMessage('Не удалось проверить облако. Записи остались на устройстве. Проверь интернет и повтори попытку.');}
+ finally{checkingCloud=false;}
+}
 function clearUploadTimer(){if(cloudTimer){clearTimeout(cloudTimer);cloudTimer=null}}
 function leaveAccount(){
  ++authEpoch;clearUploadTimer();session=null;activeUserId=null;cloudRevision=0;cloudConflict=false;
@@ -1009,7 +1047,7 @@ function leaveAccount(){
 }
 async function activateAccount(nextSession){
  if(!nextSession?.user)return;
- if(activeUserId===nextSession.user.id){session=nextSession;renderSettings();return}
+ if(activeUserId===nextSession.user.id){session=nextSession;renderSettings();void checkCloudUpdates();return}
  const epoch=++authEpoch;clearUploadTimer();
  session=nextSession;activeUserId=nextSession.user.id;cloudConflict=false;
  const id=activeUserId;cloudRevision=Number(localStorage.getItem(versionKey(id))||0);
@@ -1044,7 +1082,7 @@ async function uploadPending(){
  if(epoch!==authEpoch||id!==activeUserId)return;
  if(err||!result){
   const collision=!result&&!err||['23505','PGRST116'].includes(err?.code);
-  if(collision){cloudConflict=true;setMessage('Изменения в облаке отличаются. Автоматическая отправка остановлена во избежание потери данных. Сначала экспортируй JSON, затем выбери «Загрузить из облака».')}
+  if(collision){cloudConflict=true;setMessage('Изменения в облаке отличаются. Автоматическая отправка остановлена во избежание потери данных. Сначала экспортируй JSON, затем при необходимости выбери «Восстановить из облака».')}
   else setMessage('Не удалось синхронизировать: '+(err?.message||'сеть недоступна')+'. Локальные изменения сохранены. Можно повторить вручную.');
   return;
  }
@@ -1054,7 +1092,7 @@ async function uploadPending(){
 }
 async function pullCloud(){
  if(!sb||!session||cloudBusy)return;
- if(localPending()&&!confirm('Внимание: несинхронизированные локальные изменения будут заменены облачными. Сначала экспортируй JSON. Продолжить?'))return;
+ if(localPending()){downloadBackup(publicData(),'betteryou-unsynced-before-cloud.json');if(!confirm('На этом устройстве есть несинхронизированные изменения. Их резервная копия скачана. Восстановление заменит текущие данные облачной версией. Продолжить?'))return;}
  const id=activeUserId,epoch=authEpoch,initialLocal=JSON.stringify(publicData());cloudBusy=true;renderSettings();
  try{
   const {data,error}=await sb.from('user_data').select('data,revision').eq('user_id',id).maybeSingle();
@@ -1089,7 +1127,7 @@ $('signIn').onclick=async()=>{
 };
 async function ensureCloud(){if(sb)return true;return setupCloud({url:$('sbUrl').value.trim(),key:$('sbKey').value.trim()})}
 $('signOut').onclick=async()=>{if(!sb)return;if(localPending()&&!confirm('Не все изменения отправлены в облако. Они останутся на устройстве, но не появятся на другом телефоне. Выйти?'))return;const {error}=await sb.auth.signOut();if(error)alert(error.message);else leaveAccount()};
-$('syncNow').onclick=async()=>{if(!session){alert('Сначала войди в аккаунт');return}if(cloudConflict){alert('Конфликт версий. Сначала сохрани экспорт JSON и проверь данные перед выбором облачной версии.');return}if(!localPending()){setMessage('Все локальные изменения уже отправлены в облако.');return}await uploadPending()};
+$('syncNow').onclick=async()=>{if(!session){alert('Сначала войди в аккаунт');return}if(cloudConflict){alert('Конфликт версий. Сначала сохрани экспорт JSON и проверь данные перед выбором облачной версии.');return}if(!localPending()){await checkCloudUpdates(true);return}if(!cloudConflict)await uploadPending()};
 $('pullCloud').onclick=pullCloud;
 $('importGuest').onclick=()=>{
  if(!session)return;
@@ -1120,7 +1158,7 @@ function quickGo(target){
  if(target==='scan'){go('food');applyFoodMode('scan');return}
  if(target==='manual'){go('food');applyFoodMode('manual');return}
  if(target==='food'){go('food');applyFoodMode('search');return}
- if(target==='training'){go('training');applyTrainingMode('session');return}
+ if(target==='training'){go('training');applyTrainingMode(trainingSessionDraft()?'session':'plan');return}
  go(target);
 }
 document.querySelectorAll('[data-dock-route]').forEach(b=>b.onclick=()=>go(b.dataset.dockRoute));
@@ -1132,4 +1170,8 @@ document.querySelectorAll('[data-route]').forEach(b=>b.onclick=()=>go(b.dataset.
 document.querySelectorAll('[data-close-sheet]').forEach(b=>b.onclick=closeSheets);
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&activeSheet){closeSheets();if(previousFocus?.focus)previousFocus.focus();}});
 
+// Refresh cloud safely when returning to BetterYou, including after losing the network.
+window.addEventListener('online',()=>{if(!session)return;if(localPending()&&!cloudConflict)scheduleUpload();else void checkCloudUpdates()});
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')void checkCloudUpdates()});
+window.addEventListener('focus',()=>void checkCloudUpdates());
 $('wDate').value=today();renderAll();
