@@ -4,7 +4,7 @@ const uid=()=>Math.random().toString(36).slice(2)+Date.now().toString(36);
 const defaultState={
  profile:{age:null,height:null,weight:null,sex:'',calories:2000,protein:100,fat:65,steps:8000},
  weights:[],
- dailySteps:[],
+ dailySteps:[],weekPlan:[],
  foods:[],customFoods:[],barcodeFoods:[],personalFoods:[],favoriteFoods:[],shopping:[],lifts:[],completed:{},
  workouts:[
  {name:'День 1 · Грудь + руки',day:'Пн',items:[['Жим гантелей лёжа','Грудь',3,'8–12'],['Жим гантелей на наклонной скамье','Грудь',3,'8–12'],['Сведение рук в кроссовере','Грудь',2,'12–15'],['Сгибание рук с гантелями','Бицепс',3,'8–12'],['Сгибание на скамье Скотта или на блоке','Бицепс',2,'10–15'],['Разгибание рук на блоке с канатом','Трицепс',3,'10–15'],['Разгибание рук над головой на блоке','Трицепс',2,'10–15']]},
@@ -25,7 +25,7 @@ const CONFIG_KEY='betteryou-supabase-config-v2';
 const userKey=id=>`betteryou-user-${id}`;
 const pendingKey=id=>`betteryou-pending-${id}`;
 const versionKey=id=>`betteryou-version-${id}`;
-const dataFields=['profile','weights','dailySteps','foods','customFoods','barcodeFoods','personalFoods','favoriteFoods','shopping','lifts','completed','workouts','recipes'];
+const dataFields=['profile','weights','dailySteps','weekPlan','foods','customFoods','barcodeFoods','personalFoods','favoriteFoods','shopping','lifts','completed','workouts','recipes'];
 function cleanData(d){
  const result=structuredClone(defaultState);
  if(!d||typeof d!=='object'||Array.isArray(d))return result;
@@ -554,6 +554,122 @@ function deletePersonalFood(id){
 
 function renderShopping(){$('shoppingList').innerHTML=state.shopping.length?state.shopping.map((x,i)=>`<label class="checkrow"><input type="checkbox" data-shop="${i}" ${x.done?'checked':''}><span style="${x.done?'text-decoration:line-through;opacity:.55':''}">${esc(x.name)}</span><span style="margin-left:auto"></span><button type="button" class="danger" data-shopdel="${i}">×</button></label>`).join(''):'<p class="muted">Список пуст. Добавь продукты или сгенерируй список из рецептов.</p>';
  $('shoppingList').querySelectorAll('[data-shop]').forEach(b=>b.onchange=()=>{state.shopping[+b.dataset.shop].done=b.checked;save()});$('shoppingList').querySelectorAll('[data-shopdel]').forEach(b=>b.onclick=()=>{state.shopping.splice(+b.dataset.shopdel,1);save()})}
+
+// BetterYou 2.7 — editable weekly meal planner.
+// The plan is separate from the diary: only explicit day actions add diary entries.
+let weeklyAnchor=today();
+const PLAN_MEALS=['Завтрак','Обед','Перекус','Ужин'];
+function isoLocal(d){return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-')}
+function dateAtNoon(iso){if(!/^\d{4}-\d{2}-\d{2}$/.test(iso))return null;const [y,m,d]=iso.split('-').map(Number);const v=new Date(y,m-1,d,12);return v.getFullYear()===y&&v.getMonth()===m-1&&v.getDate()===d?v:null}
+function mondayOf(iso){const d=dateAtNoon(iso)||dateAtNoon(today());d.setDate(d.getDate()-((d.getDay()+6)%7));return isoLocal(d)}
+function datesOfWeek(iso){const d=dateAtNoon(mondayOf(iso));return Array.from({length:7},(_,i)=>{const x=new Date(d);x.setDate(d.getDate()+i);return isoLocal(x)})}
+function prettyPlanDate(iso){const d=dateAtNoon(iso);return d?d.toLocaleDateString('ru-RU',{weekday:'short',day:'numeric',month:'short'}):iso}
+function validPlanItem(x){return x&&typeof x==='object'&&dateAtNoon(x.date)&&PLAN_MEALS.includes(x.meal)&&Number.isFinite(Number(x.quantity))&&Number(x.quantity)>0}
+function planEntries(date){return (Array.isArray(state.weekPlan)?state.weekPlan:[]).filter(x=>validPlanItem(x)&&x.date===date)}
+function planTotals(items){return items.reduce((t,x)=>{for(const k of ['kcal','p','f','c'])t[k]+=(Number(x[k])||0);return t},{kcal:0,p:0,f:0,c:0})}
+function makePlanItem(food,amount,date,meal){
+ const item=foodEntry(food,amount,date,meal);
+ return {...item,unit:food.unit||'portion',ingredients:Array.isArray(food.ingredients)?structuredClone(food.ingredients):[]};
+}
+function mealPlanSuggestions(dates){
+ // Recipe rotations are examples, not nutritionally balanced prescribed diets.
+ const pattern=[[2,0,4,3],[4,1,2,5],[2,5,4,0],[4,0,2,1],[2,1,4,3],[4,5,2,0],[2,3,4,1]];
+ const recipes=state.recipes||[];
+ return dates.flatMap((date,i)=>{
+  const ids=pattern[i].filter(x=>recipes[x]);if(!ids.length)return [];
+  const base=ids.reduce((sum,x)=>sum+(Number(recipes[x].kcal)||0),0)||1;
+  const calorieGoal=Number(state.profile.calories)||2000;
+  const portion=Math.round(Math.max(0.75,Math.min(1.6,calorieGoal/base))*4)/4;
+  return ids.map((id,k)=>makePlanItem({...recipes[id],id:'r'+id,unit:'portion',base:1},portion,date,PLAN_MEALS[k]));
+ });
+}
+function planShoppingRows(items){
+ const aggregated=new Map();
+ for(const entry of items){
+  if(!validPlanItem(entry))continue;
+  const isRecipe=Array.isArray(entry.ingredients)&&entry.ingredients.length>0;
+  const source=isRecipe?entry.ingredients:[`${entry.name||'Продукт'} ${Number(entry.quantity)||0} ${entry.unit==='g'?'г':'порц.'}`];
+  for(const raw of source){
+   const ingredient=String(raw||'').trim();if(!ingredient)continue;
+   const matched=ingredient.match(/^(.+?)\s+(\d+(?:[.,]\d+)?)\s*(г|мл|порц\.)\b(.*)$/i);
+   let name=ingredient,unit='',qty=0;
+   if(matched){name=(matched[1]+' '+(matched[4]||'')).trim().replace(/\s+/g,' ');unit=matched[3];qty=Number(matched[2].replace(',','.'))*(isRecipe?Number(entry.quantity):1)}
+   else if(isRecipe)name=ingredient; // No parseable amount; still include once.
+   const key=name.toLocaleLowerCase('ru-RU')+'|'+unit;
+   const old=aggregated.get(key)||{name,unit,qty:0};old.qty+=qty;aggregated.set(key,old);
+  }
+ }
+ return [...aggregated.values()].map(({name,unit,qty})=>{
+  const rounded=unit==='г'||unit==='мл'?Math.max(1,Math.round(qty)):Math.round(qty*4)/4;
+  return `${name}${unit?' — '+rounded+' '+unit:''}`;
+ }).sort((a,b)=>a.localeCompare(b,'ru'));
+}
+function addPlanDayToDiary(date){
+ const items=planEntries(date),existing=new Set(state.foods.filter(f=>f.date===date&&f.planId).map(f=>f.planId));
+ const add=items.filter(x=>!existing.has(x.id));
+ if(!add.length){alert(items.length?'Все позиции этого дня уже добавлены в дневник.':'На этот день нет запланированных блюд.');return}
+ state.foods.push(...add.map(x=>({id:uid(),planId:x.id,date:x.date,meal:x.meal,name:x.name,kcal:x.kcal,p:x.p,f:x.f,c:x.c,quantity:x.quantity,quantityUnit:x.quantityUnit,sourceId:x.sourceId})));
+ save();$('plannerMessage').textContent=`В дневник за ${date} добавлено ${add.length} позиций. Существующие записи не изменены.`;
+}
+function renderWeeklyPlanner(){
+ const dates=datesOfWeek(weeklyAnchor),items=(Array.isArray(state.weekPlan)?state.weekPlan:[]).filter(validPlanItem),goal=Number(state.profile.calories)||2000;
+ $('plannerRange').textContent=`${dates[0]} — ${dates[6]}`;
+ $('plannerTarget').textContent=`Ориентир из профиля: ${Math.round(goal)} ккал в день`;
+ $('plannerDay').innerHTML=dates.map(date=>`<option value="${date}">${esc(prettyPlanDate(date))}</option>`).join('');
+ const chosen=$('plannerDay').dataset.selected;
+ $('plannerDay').value=dates.includes(chosen)?chosen:(dates.includes(today())?today():dates[0]);
+ $('plannerDay').dataset.selected=$('plannerDay').value;
+ const sourcePrev=$('plannerFood').value;
+ const options=allFoods();
+ $('plannerFood').innerHTML=options.map(f=>`<option value="${esc(f.id)}">${esc(f.name)} (${Math.round(f.kcal)} ккал/${f.unit==='g'?'100 г':'порция'})</option>`).join('');
+ if(options.some(f=>f.id===sourcePrev))$('plannerFood').value=sourcePrev;
+ const slotDays=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+ $('plannerWeek').innerHTML=dates.map((date,i)=>{
+  const dayItems=items.filter(x=>x.date===date);const t=planTotals(dayItems);
+  const delta=Math.round(t.kcal-goal);
+  const details=dayItems.length?PLAN_MEALS.flatMap(meal=>dayItems.filter(x=>x.meal===meal).map(x=>`<div class="planner-meal"><div><span class="pill">${esc(meal)}</span> <b>${esc(x.name||'Блюдо')}</b><div class="small muted">${Number(x.quantity)} ${x.unit==='g'?'г':'порц.'} · ${Math.round(Number(x.kcal)||0)} ккал</div></div><button type="button" class="danger" data-plan-remove="${esc(x.id)}" aria-label="Убрать блюдо">×</button></div>`)).join(''):'<p class="small muted">Пока нет блюд.</p>';
+  return `<article class="planner-day"><div class="row between" style="flex-wrap:wrap"><div><b>${slotDays[i]} · ${date.slice(8,10)}.${date.slice(5,7)}</b><div class="small muted">${Math.round(t.kcal)} / ${Math.round(goal)} ккал · ${delta>=0?'+':''}${delta} ккал</div></div><button type="button" class="secondary" data-plan-day="${date}">В дневник</button></div><div class="bar" style="margin:8px 0 10px"><i style="width:${Math.min(100,Math.round(t.kcal/Math.max(goal,1)*100))}%"></i></div><div class="planner-day-meals">${details}</div><div class="small muted">Б ${Math.round(t.p)} / Ж ${Math.round(t.f)} / У ${Math.round(t.c)} г</div></article>`;
+ }).join('');
+ $('plannerWeek').querySelectorAll('[data-plan-remove]').forEach(b=>b.onclick=()=>{
+  if(!confirm('Убрать блюдо из плана? Запись в дневнике не изменится.'))return;
+  state.weekPlan=state.weekPlan.filter(x=>x.id!==b.dataset.planRemove);save();
+ });
+ $('plannerWeek').querySelectorAll('[data-plan-day]').forEach(b=>b.onclick=()=>addPlanDayToDiary(b.dataset.planDay));
+ updatePlannerAmount();
+}
+function updatePlannerAmount(){
+ const item=allFoods().find(f=>f.id===$('plannerFood').value);const g=item?.unit==='g';
+ const inp=$('plannerQuantity'),unit=g?'g':'portion';
+ if(inp.dataset.unit!==unit){inp.dataset.unit=unit;inp.value=g?'100':'1'}
+ inp.min=g?'1':'0.25';inp.max=g?'3000':'10';inp.step=g?'1':'0.25';
+ $('plannerQuantityLabel').textContent=g?'Количество, г':'Количество порций';
+}
+$('plannerPrev').onclick=()=>{const d=dateAtNoon(mondayOf(weeklyAnchor));d.setDate(d.getDate()-7);weeklyAnchor=isoLocal(d);renderWeeklyPlanner()};
+$('plannerNext').onclick=()=>{const d=dateAtNoon(mondayOf(weeklyAnchor));d.setDate(d.getDate()+7);weeklyAnchor=isoLocal(d);renderWeeklyPlanner()};
+$('plannerToday').onclick=()=>{weeklyAnchor=today();$('plannerDay').dataset.selected='';renderWeeklyPlanner()};
+$('plannerFood').onchange=updatePlannerAmount;
+$('plannerDay').onchange=()=>{$('plannerDay').dataset.selected=$('plannerDay').value};
+$('plannerAdd').onsubmit=e=>{
+ e.preventDefault();const f=allFoods().find(x=>x.id===$('plannerFood').value),amount=Number($('plannerQuantity').value),date=$('plannerDay').value,meal=$('plannerMeal').value;
+ if(!f||!datesOfWeek(weeklyAnchor).includes(date)||!PLAN_MEALS.includes(meal)||!Number.isFinite(amount)||amount<=0||amount>(f.unit==='g'?3000:10)){alert('Проверь блюдо, дату и количество.');return}
+ state.weekPlan.push(makePlanItem(f,amount,date,meal));save();$('plannerMessage').textContent='Блюдо добавлено в план. В дневнике питания пока ничего не изменилось.';
+};
+$('plannerGenerate').onclick=()=>{
+ const weekDates=datesOfWeek(weeklyAnchor),existing=state.weekPlan.some(x=>weekDates.includes(x.date));
+ if(existing&&!confirm('Заменить блюда ТОЛЬКО в выбранной неделе? Записи дневника сохранятся.'))return;
+ state.weekPlan=state.weekPlan.filter(x=>!weekDates.includes(x.date));
+ state.weekPlan.push(...mealPlanSuggestions(weekDates));save();
+ $('plannerMessage').textContent='Создан пример меню на неделю. Проверь состав, аллергенные продукты и порции. Калории могут отличаться от ориентира.';
+};
+$('plannerToShopping').onclick=()=>{
+ const entries=state.weekPlan.filter(x=>datesOfWeek(weeklyAnchor).includes(x.date));
+ if(!entries.length){alert('Сначала добавь блюда в план.');return}
+ const rows=planShoppingRows(entries),prev=new Set(state.shopping.map(x=>String(x.name||'').trim().toLocaleLowerCase('ru-RU')));
+ const pending=rows.filter(x=>!prev.has(x.toLocaleLowerCase('ru-RU')));
+ state.shopping.push(...pending.map(name=>({name,done:false})));save();
+ $('plannerMessage').textContent=`Добавлено ${pending.length} новых позиций в «Покупки». Уже существующие не дублировали.`;
+};
+
 function renderSettings(){
  let p=state.profile;
  for(let [id,k] of [['sAge','age'],['sHeight','height'],['sWeight','weight'],['sSex','sex'],['sCalories','calories'],['sProtein','protein'],['sFat','fat'],['sSteps','steps']])$(id).value=p[k]??'';
@@ -655,7 +771,7 @@ $('applyOnboarding').onclick=()=>{
  save();suggestedPlan=null;go('home');alert('Персональный план сохранён! Его можно изменить в настройках.');
 };
 
-function renderAll(){renderHome();renderWeights();renderTraining();renderFood();renderShopping();renderSteps();renderSettings()}
+function renderAll(){renderHome();renderWeights();renderTraining();renderFood();renderShopping();renderSteps();renderWeeklyPlanner();renderSettings()}
 $('weightForm').onsubmit=e=>{e.preventDefault();let entry={date:$('wDate').value,weight:+$('wWeight').value,waist:+$('wWaist').value||null,steps:+$('wSteps').value||null};state.weights=state.weights.filter(x=>x.date!==entry.date);state.weights.push(entry);state.profile.weight=entry.weight;if($('wSteps').value!==''){state.dailySteps=state.dailySteps.filter(x=>x.date!==entry.date);state.dailySteps.push({date:entry.date,steps:entry.steps||0})}save();e.target.reset();$('wDate').value=today();};
 $('foodForm').onsubmit=e=>{
  e.preventDefault();const f=allFoods().find(x=>x.id===$('foodSelect').value);
