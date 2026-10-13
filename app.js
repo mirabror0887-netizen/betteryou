@@ -2,9 +2,9 @@ const $=id=>document.getElementById(id);
 const today=()=>new Date().toLocaleDateString('en-CA');
 const uid=()=>Math.random().toString(36).slice(2)+Date.now().toString(36);
 const defaultState={
- profile:{age:20,height:174,weight:74,sex:'male',calories:2200,protein:150,fat:65,steps:10000},
- weights:[{date:today(),weight:74,waist:null,steps:9000}],
- foods:[],customFoods:[],shopping:[],lifts:[],completed:{},cloud:{url:'',key:'',email:'',user:null},
+ profile:{age:null,height:null,weight:null,sex:'',calories:2000,protein:100,fat:65,steps:8000},
+ weights:[],
+ foods:[],customFoods:[],shopping:[],lifts:[],completed:{},
  workouts:[
  {name:'День 1 · Грудь + руки',day:'Пн',items:[['Жим гантелей лёжа','Грудь',3,'8–12'],['Жим гантелей на наклонной скамье','Грудь',3,'8–12'],['Сведение рук в кроссовере','Грудь',2,'12–15'],['Сгибание рук с гантелями','Бицепс',3,'8–12'],['Сгибание на скамье Скотта или на блоке','Бицепс',2,'10–15'],['Разгибание рук на блоке с канатом','Трицепс',3,'10–15'],['Разгибание рук над головой на блоке','Трицепс',2,'10–15']]},
  {name:'День 2 · Спина + плечи',day:'Ср',items:[['Тяга верхнего блока','Спина',3,'8–12'],['Тяга с упором грудью','Спина',3,'8–12'],['Пуловер на верхнем блоке','Спина',2,'12–15'],['Жим гантелей сидя','Плечи',3,'8–12'],['Подъёмы гантелей в стороны','Плечи',3,'12–20'],['Обратная бабочка','Задняя дельта',3,'12–15'],['Face pull','Задняя дельта',2,'12–20']]},
@@ -18,9 +18,37 @@ const defaultState={
  {name:'Говядина с рисом',kcal:590,p:42,f:17,c:67,min:25,ingredients:['Постная говядина 160 г','Рис сухой 75 г','Перец 100 г','Соевый соус 10 мл'],steps:'Приготовь рис. Нарежь говядину тонкими полосками и быстро обжарь до готовности, добавь перец и соус.'}
  ]
 };
-let state=load(), activeWorkout=0, sb=null, session=null, installPrompt=null;
-function load(){try{return {...structuredClone(defaultState),...JSON.parse(localStorage.getItem('betteryou-state')||'{}')}}catch{return structuredClone(defaultState)}}
-function save(){localStorage.setItem('betteryou-state',JSON.stringify(state));renderAll()}
+// BetterYou 2.0: cloud accounts have completely separate local caches.
+const GUEST_KEY='betteryou-state';
+const CONFIG_KEY='betteryou-supabase-config-v2';
+const userKey=id=>`betteryou-user-${id}`;
+const pendingKey=id=>`betteryou-pending-${id}`;
+const versionKey=id=>`betteryou-version-${id}`;
+const dataFields=['profile','weights','foods','customFoods','shopping','lifts','completed','workouts','recipes'];
+function cleanData(d){
+ const result=structuredClone(defaultState);
+ if(!d||typeof d!=='object'||Array.isArray(d))return result;
+ for(const k of dataFields){
+  if(!(k in d))continue;
+  const v=d[k];
+  if(k==='profile'&&v&&typeof v==='object'&&!Array.isArray(v))result.profile={...result.profile,...v};
+  else if(k==='completed'&&v&&typeof v==='object'&&!Array.isArray(v))result.completed=v;
+  else if(Array.isArray(v))result[k]=v;
+ }
+ return result;
+}
+function readStorage(key){try{let x=localStorage.getItem(key);return x?cleanData(JSON.parse(x)):cleanData(null)}catch{return cleanData(null)}}
+function publicData(){return Object.fromEntries(dataFields.map(k=>[k,structuredClone(state[k])]))}
+let state=readStorage(GUEST_KEY),activeWorkout=0,sb=null,session=null,installPrompt=null;
+let activeUserId=null,cloudRevision=0,cloudConflict=false,cloudBusy=false,cloudTimer=null,authEpoch=0;
+let cloudMessage='Гостевой режим: данные только на этом устройстве.';
+function localPending(){return !!(activeUserId&&localStorage.getItem(pendingKey(activeUserId))==='1')}
+function scheduleUpload(){if(cloudTimer)clearTimeout(cloudTimer);if(session&&!cloudConflict)cloudTimer=setTimeout(uploadPending,1100)}
+function save(){
+ if(activeUserId){localStorage.setItem(userKey(activeUserId),JSON.stringify(publicData()));localStorage.setItem(pendingKey(activeUserId),'1');cloudMessage='Изменения сохранены на устройстве, ожидается синхронизация.';scheduleUpload();}
+ else localStorage.setItem(GUEST_KEY,JSON.stringify(publicData()));
+ renderAll();
+}
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function go(tab){document.querySelectorAll('.tabscreen').forEach(x=>x.classList.toggle('active',x.id===tab));document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('active',x.dataset.tab===tab));window.scrollTo({top:0,behavior:'smooth'});if(tab==='training')renderTraining()}
 document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>go(b.dataset.tab));
@@ -33,7 +61,8 @@ function renderHome(){
  $('macroStats').innerHTML=metrics.map(([n,v,g,u])=>`<div class="stat"><div class="sub">${n}</div><div class="metric">${v}<small> / ${g} ${u}</small></div><div class="bar"><i style="width:${Math.min(100,g?v/g*100:0)}%"></i></div></div>`).join('');
  const latest=[...state.weights].sort((a,b)=>a.date.localeCompare(b.date));drawChart(latest);
  if(latest.length>1){let d=latest[latest.length-1].weight-latest[0].weight;$('weightDelta').textContent=(d>0?'+':'')+d.toFixed(1)+' кг';}else $('weightDelta').textContent='Добавь записи';
- const done=Object.values(state.completed).filter(Boolean).length, checks=[['Питание',todayFoods().length>0],['Тренировка',!!state.completed[today()]],['Шаги',false]];
+ const todaySteps=state.weights.find(w=>w.date===today())?.steps||0;
+ const checks=[['Питание',todayFoods().length>0],['Тренировка',!!state.completed[today()]],['Шаги',todaySteps>=state.profile.steps]];
  $('todayChecklist').innerHTML=checks.map(([n,v])=>`<div class="listitem row between"><span>${n}</span><span class="${v?'good':'muted'}">${v?'✓ отмечено':'не отмечено'}</span></div>`).join('');
  $('dayBar').style.width=(checks.filter(x=>x[1]).length/checks.length*100)+'%';$('dayProgress').textContent=`${checks.filter(x=>x[1]).length} из ${checks.length} привычек отмечено`;
  const rate=latest.length>=8?(latest.slice(-7).reduce((a,x)=>a+x.weight,0)/Math.min(7,latest.length)-latest.slice(-14,-7).reduce((a,x)=>a+x.weight,0)/Math.max(1,Math.min(7,latest.slice(-14,-7).length))):null;
@@ -44,7 +73,7 @@ function renderHome(){
  $('recommendation').innerHTML=`<p>${esc(msg)}</p><p class="small muted">Коррекция калорий — только после 2–3 недель устойчивых данных о среднем весе, талии и соблюдении плана. Это ориентир, не медицинская рекомендация.</p>`;
 }
 function drawChart(data){let el=$('weightChart');if(!data.length){el.textContent='Добавь вес, чтобы увидеть график';return}let pts=data.slice(-14), vals=pts.map(x=>x.weight),min=Math.min(...vals)-.5,max=Math.max(...vals)+.5,range=max-min||1;let coords=vals.map((v,i)=>`${10+i*(280/Math.max(1,vals.length-1))},${150-(v-min)/range*120}`).join(' ');el.innerHTML=`<svg viewBox="0 0 300 170" role="img" aria-label="График веса"><line x1="8" y1="150" x2="292" y2="150" stroke="#284057"/><polyline points="${coords}" fill="none" stroke="#35d6a0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>${vals.map((v,i)=>`<circle cx="${10+i*(280/Math.max(1,vals.length-1))}" cy="${150-(v-min)/range*120}" r="3.5" fill="#35d6a0"/>`).join('')}<text x="8" y="13" fill="#91a6bc" font-size="10">${max.toFixed(1)} кг</text><text x="8" y="166" fill="#91a6bc" font-size="10">${esc(pts[0].date.slice(5))}</text><text x="255" y="166" fill="#91a6bc" font-size="10">${esc(pts[pts.length-1].date.slice(5))}</text></svg>`}
-function renderWeights(){ $('wDate').value ||= today();$('wWeight').value=state.profile.weight;$('wSteps').value=state.profile.steps||10000;
+function renderWeights(){ $('wDate').value ||= today();$('wWeight').value=state.profile.weight??'';$('wSteps').value=state.weights.find(w=>w.date===today())?.steps??'';
  const arr=[...state.weights].sort((a,b)=>b.date.localeCompare(a.date));$('weightHistory').innerHTML=arr.length?arr.map((x,i)=>`<div class="listitem row between"><div><b>${esc(x.date)}</b><div class="sub">${x.waist?`Талия ${x.waist} см · `:''}${x.steps?x.steps+' шагов':''}</div></div><div class="row"><b>${x.weight} кг</b><button class="danger" data-delweight="${i}">×</button></div></div>`).join(''):'<p class="muted">Записей пока нет.</p>';
  $('weightHistory').querySelectorAll('[data-delweight]').forEach(b=>b.onclick=()=>{let x=arr[+b.dataset.delweight];state.weights=state.weights.filter(w=>w!==x);save()});
 }
@@ -64,23 +93,153 @@ function renderFood(){let fs=allFoods();$('foodSelect').innerHTML=fs.map(f=>`<op
 }
 function renderShopping(){$('shoppingList').innerHTML=state.shopping.length?state.shopping.map((x,i)=>`<label class="checkrow"><input type="checkbox" data-shop="${i}" ${x.done?'checked':''}><span style="${x.done?'text-decoration:line-through;opacity:.55':''}">${esc(x.name)}</span><span style="margin-left:auto"></span><button type="button" class="danger" data-shopdel="${i}">×</button></label>`).join(''):'<p class="muted">Список пуст. Добавь продукты или сгенерируй список из рецептов.</p>';
  $('shoppingList').querySelectorAll('[data-shop]').forEach(b=>b.onchange=()=>{state.shopping[+b.dataset.shop].done=b.checked;save()});$('shoppingList').querySelectorAll('[data-shopdel]').forEach(b=>b.onclick=()=>{state.shopping.splice(+b.dataset.shopdel,1);save()})}
-function renderSettings(){let p=state.profile;for(let [id,k] of [['sAge','age'],['sHeight','height'],['sWeight','weight'],['sSex','sex'],['sCalories','calories'],['sProtein','protein'],['sFat','fat'],['sSteps','steps']])$(id).value=p[k]??'';const c=state.cloud;$('sbUrl').value=c.url||'';$('sbKey').value=c.key||'';$('sbEmail').value=c.email||'';$('cloudStatus').textContent=session?`Подключено: ${session.user.email}. Данные можно синхронизировать вручную.`:'Не подключено. Данные сохраняются локально в браузере.'}
+function renderSettings(){
+ let p=state.profile;
+ for(let [id,k] of [['sAge','age'],['sHeight','height'],['sWeight','weight'],['sSex','sex'],['sCalories','calories'],['sProtein','protein'],['sFat','fat'],['sSteps','steps']])$(id).value=p[k]??'';
+ const config=getConfig();$('sbUrl').value=config.url||'';$('sbKey').value=config.key||'';
+ const status=$('cloudStatus');
+ if(!session){status.textContent=cloudMessage+' При переходе в аккаунт гостевые записи автоматически НЕ переносятся.';}
+ else {status.textContent=`Аккаунт: ${session.user.email||'пользователь'} · ${cloudMessage}`;}
+ $('cloudAccount').hidden=!session;
+ $('cloudGuest').hidden=!!session;
+ $('signOut').disabled=!session;
+ $('syncNow').disabled=!session||cloudBusy;
+ $('pullCloud').disabled=!session||cloudBusy;
+ $('importGuest').disabled=!session||cloudBusy;
+}
 function renderAll(){renderHome();renderWeights();renderTraining();renderFood();renderShopping();renderSettings()}
-$('weightForm').onsubmit=e=>{e.preventDefault();let entry={date:$('wDate').value,weight:+$('wWeight').value,waist:+$('wWaist').value||null,steps:+$('wSteps').value||null};state.weights=state.weights.filter(x=>x.date!==entry.date);state.weights.push(entry);state.profile.weight=entry.weight;state.profile.steps=entry.steps||state.profile.steps;save();e.target.reset();$('wDate').value=today();};
+$('weightForm').onsubmit=e=>{e.preventDefault();let entry={date:$('wDate').value,weight:+$('wWeight').value,waist:+$('wWaist').value||null,steps:+$('wSteps').value||null};state.weights=state.weights.filter(x=>x.date!==entry.date);state.weights.push(entry);state.profile.weight=entry.weight;save();e.target.reset();$('wDate').value=today();};
 $('foodForm').onsubmit=e=>{e.preventDefault();let f=allFoods().find(x=>x.id===$('foodSelect').value);if(!f)return;let n=+$('foodServings').value;state.foods.push({id:uid(),date:today(),name:f.name,meal:$('mealType').value,kcal:f.kcal*n,p:f.p*n,f:f.f*n,c:f.c*n});save();};
 $('customFoodForm').onsubmit=e=>{e.preventDefault();state.customFoods.push({name:$('customName').value,kcal:+$('customKcal').value,p:+$('customP').value,f:+$('customF').value,c:+$('customC').value,min:0,ingredients:[],steps:'Пользовательское блюдо'});save();e.target.reset()};
 $('clearFood').onclick=()=>{if(confirm('Удалить записи питания за сегодня?')){state.foods=state.foods.filter(f=>f.date!==today());save()}};
 $('shoppingForm').onsubmit=e=>{e.preventDefault();state.shopping.push({name:$('shoppingInput').value.trim(),done:false});save();e.target.reset()};
 $('generateList').onclick=()=>{let ingredients=[...new Set(state.recipes.slice(0,4).flatMap(r=>r.ingredients))];state.shopping.push(...ingredients.map(name=>({name,done:false})));save()};
-$('settingsForm').onsubmit=e=>{e.preventDefault();let p=state.profile;for(let [id,k] of [['sAge','age'],['sHeight','height'],['sWeight','weight'],['sCalories','calories'],['sProtein','protein'],['sFat','fat'],['sSteps','steps']])p[k]=+$(id).value;p.sex=$('sSex').value;save();alert('Настройки сохранены')};
-$('exportData').onclick=()=>{let a=document.createElement('a'),url=URL.createObjectURL(new Blob([JSON.stringify(state,null,2)],{type:'application/json'}));a.href=url;a.download='betteryou-backup.json';a.click();URL.revokeObjectURL(url)};
-$('importData').onchange=async e=>{try{let d=JSON.parse(await e.target.files[0].text());if(!d.profile||!d.weights)throw Error();state={...structuredClone(defaultState),...d};save();alert('Данные импортированы')}catch{alert('Не удалось импортировать файл JSON')}};
-$('resetData').onclick=()=>{if(confirm('Точно удалить все локальные данные? Сначала сделай экспорт.')){state=structuredClone(defaultState);save()}};
-function initSupabase(){let url=$('sbUrl').value.trim(),key=$('sbKey').value.trim();if(!url||!key){alert('Введи Supabase URL и anon/publishable key');return false}if(!window.supabase){alert('Не удалось загрузить Supabase SDK. Проверь интернет-соединение.');return false}state.cloud.url=url;state.cloud.key=key;state.cloud.email=$('sbEmail').value.trim();localStorage.setItem('betteryou-state',JSON.stringify(state));sb=window.supabase.createClient(url,key);return true}
-$('signUp').onclick=async()=>{if(!initSupabase())return;let {data,error}=await sb.auth.signUp({email:$('sbEmail').value.trim(),password:$('sbPassword').value});if(error){alert(error.message);return}session=data;state.cloud.user=data.user;save();alert('Запрос отправлен. Если включено подтверждение email, подтверди адрес и затем войди.')};
-$('signIn').onclick=async()=>{if(!initSupabase())return;let {data,error}=await sb.auth.signInWithPassword({email:$('sbEmail').value.trim(),password:$('sbPassword').value});if(error){alert(error.message);return}session=data;state.cloud.user=data.user;save();alert('Вход выполнен. Теперь можно синхронизировать данные.')};
-$('signOut').onclick=async()=>{if(sb)await sb.auth.signOut();session=null;state.cloud.user=null;save()};
-$('syncNow').onclick=async()=>{if(!initSupabase())return;if(!session){let {data}=await sb.auth.getSession();session=data.session}if(!session){alert('Сначала войди в аккаунт');return}let payload={user_id:session.user.id,data:state,updated_at:new Date().toISOString()};let {error}=await sb.from('user_data').upsert(payload,{onConflict:'user_id'});if(error){alert('Ошибка синхронизации: '+error.message+' — проверь SQL-схему и RLS в README.');return}alert('Данные отправлены в облако.')};
+$('settingsForm').onsubmit=e=>{e.preventDefault();let p=state.profile;for(let [id,k] of [['sAge','age'],['sHeight','height'],['sWeight','weight'],['sCalories','calories'],['sProtein','protein'],['sFat','fat'],['sSteps','steps']])p[k]=$(id).value===''?null:+$(id).value;p.sex=$('sSex').value;save();alert('Настройки сохранены')};
+$('exportData').onclick=()=>{let a=document.createElement('a'),url=URL.createObjectURL(new Blob([JSON.stringify(publicData(),null,2)],{type:'application/json'}));a.href=url;a.download='betteryou-backup.json';a.click();URL.revokeObjectURL(url)};
+$('importData').onchange=async e=>{try{let d=JSON.parse(await e.target.files[0].text());if(!d.profile||!d.weights)throw Error();if(!confirm('Импорт заменит текущие данные этого профиля. Продолжить?'))return;state=cleanData(d);save();alert('Данные импортированы')}catch{alert('Не удалось импортировать файл JSON')}};
+$('resetData').onclick=()=>{if(confirm('Точно удалить все локальные данные? Сначала сделай экспорт.')){state=cleanData(null);save()}};
+function getConfig(){try{const c=JSON.parse(localStorage.getItem(CONFIG_KEY)||'{}');return {url:c.url||'',key:c.key||''}}catch{return {url:'',key:''}}}
+function validConfig(url,key){try{const u=new URL(url);return u.protocol==='https:'&&(/(^|\.)supabase\.co$/.test(u.hostname)||u.hostname==='localhost')&&key.length>15}catch{return false}}
+function setMessage(message){cloudMessage=message;renderSettings()}
+async function setupCloud(config){
+ if(!window.supabase){setMessage('Не загрузилась библиотека Supabase. Проверь интернет.');return false}
+ if(!validConfig(config.url,config.key)){alert('Введи корректные Project URL и publishable/anon key Supabase. Секретный service_role key сюда нельзя.');return false}
+ const existing=getConfig();
+ if(sb&&existing.url===config.url&&existing.key===config.key)return true;
+ if(activeUserId){alert('Сначала выйди из аккаунта, прежде чем менять проект Supabase.');return false}
+ localStorage.setItem(CONFIG_KEY,JSON.stringify(config));
+ sb=window.supabase.createClient(config.url,config.key,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
+ sb.auth.onAuthStateChange((event,s)=>{
+  // Avoid async Supabase calls inside the auth callback.
+  setTimeout(()=>{if(event==='SIGNED_OUT'){leaveAccount()}else if(s?.user){activateAccount(s)}},0);
+ });
+ try{const {data,error}=await sb.auth.getSession();if(error)throw error;
+  if(data.session?.user)await activateAccount(data.session);
+  else setMessage('Supabase подключён. Войди или зарегистрируйся. Гостевые данные хранятся отдельно.');
+ }catch(e){setMessage('Не удалось восстановить сессию: '+e.message)}
+ return true;
+}
+function clearUploadTimer(){if(cloudTimer){clearTimeout(cloudTimer);cloudTimer=null}}
+function leaveAccount(){
+ ++authEpoch;clearUploadTimer();session=null;activeUserId=null;cloudRevision=0;cloudConflict=false;
+ state=readStorage(GUEST_KEY);setMessage('Вы вышли. Сейчас открыт гостевой профиль на этом устройстве.');renderAll();
+}
+async function activateAccount(nextSession){
+ if(!nextSession?.user)return;
+ if(activeUserId===nextSession.user.id){session=nextSession;renderSettings();return}
+ const epoch=++authEpoch;clearUploadTimer();
+ session=nextSession;activeUserId=nextSession.user.id;cloudConflict=false;
+ const id=activeUserId;cloudRevision=Number(localStorage.getItem(versionKey(id))||0);
+ state=readStorage(userKey(id));cloudMessage='Вход выполнен. Проверяем облачные данные…';renderAll();
+ const {data,error}=await sb.from('user_data').select('data,revision').eq('user_id',id).maybeSingle();
+ if(epoch!==authEpoch||activeUserId!==id)return;
+ if(error){setMessage('Ошибка загрузки данных: '+error.message+' Проверь схему SQL и политики RLS.');return}
+ const remoteRev=data?.revision||0;
+ if(localPending()){
+  if(remoteRev!==cloudRevision){cloudConflict=true;setMessage('Конфликт версий: облако изменилось на другом устройстве. Локальные записи сохранены. Экспортируй JSON перед выбором «Загрузить из облака».');}
+  else{setMessage('Есть изменения на этом устройстве. Отправляем их в облако…');scheduleUpload()}
+ }else if(data){
+  state=cleanData(data.data);cloudRevision=remoteRev;
+  localStorage.setItem(versionKey(id),String(remoteRev));localStorage.setItem(userKey(id),JSON.stringify(publicData()));
+  cloudMessage='Данные загружены из облака. Автосинхронизация включена.';renderAll();
+ }else{cloudRevision=0;cloudMessage='Новый пустой профиль. Гостевые записи можно перенести отдельной кнопкой.';renderAll()}
+}
+async function uploadPending(){
+ if(!sb||!session||!activeUserId||cloudConflict||cloudBusy||!localPending())return;
+ clearUploadTimer();const id=activeUserId,epoch=authEpoch,rev=cloudRevision;
+ const sentData=publicData(),snapshot=JSON.stringify(sentData);
+ cloudBusy=true;renderSettings();
+ let result,err=null;
+ try{
+  if(rev===0){
+   const {data,error}=await sb.from('user_data').insert({user_id:id,data:sentData,revision:1}).select('revision').single();result=data;err=error;
+  }else{
+   const {data,error}=await sb.from('user_data').update({data:sentData,revision:rev+1,updated_at:new Date().toISOString()}).eq('user_id',id).eq('revision',rev).select('revision').maybeSingle();result=data;err=error;
+  }
+ }catch(e){err=e}
+ cloudBusy=false;
+ if(epoch!==authEpoch||id!==activeUserId)return;
+ if(err||!result){
+  const collision=!result&&!err||['23505','PGRST116'].includes(err?.code);
+  if(collision){cloudConflict=true;setMessage('Изменения в облаке отличаются. Автоматическая отправка остановлена во избежание потери данных. Сначала экспортируй JSON, затем выбери «Загрузить из облака».')}
+  else setMessage('Не удалось синхронизировать: '+(err?.message||'сеть недоступна')+'. Локальные изменения сохранены. Можно повторить вручную.');
+  return;
+ }
+ cloudRevision=result.revision;localStorage.setItem(versionKey(id),String(cloudRevision));
+ if(JSON.stringify(publicData())===snapshot){localStorage.removeItem(pendingKey(id));setMessage('Синхронизировано с облаком. ✓')}
+ else{setMessage('Синхронизируем новые изменения…');scheduleUpload()}
+}
+async function pullCloud(){
+ if(!sb||!session||cloudBusy)return;
+ if(localPending()&&!confirm('Внимание: несинхронизированные локальные изменения будут заменены облачными. Сначала экспортируй JSON. Продолжить?'))return;
+ const id=activeUserId,epoch=authEpoch;cloudBusy=true;renderSettings();
+ try{
+  const {data,error}=await sb.from('user_data').select('data,revision').eq('user_id',id).maybeSingle();
+  if(error)throw error;if(epoch!==authEpoch||activeUserId!==id)return;
+  if(!data){setMessage('В облаке ещё нет записей для этого аккаунта. Локальные данные не изменены.');return}
+  // Keep a local recovery copy, even when the user opts to replace local data.
+  localStorage.setItem(`betteryou-recovery-${id}`,JSON.stringify(publicData()));
+  state=cleanData(data.data);cloudRevision=data.revision;cloudConflict=false;
+  localStorage.setItem(versionKey(id),String(cloudRevision));
+  localStorage.setItem(userKey(id),JSON.stringify(publicData()));
+  localStorage.removeItem(pendingKey(id));cloudMessage='Загружено из облака. Предыдущая локальная копия сохранена на этом устройстве.';renderAll();
+ }catch(e){setMessage('Ошибка загрузки: '+e.message)}
+ finally{cloudBusy=false;renderSettings()}
+}
+$('saveCloudConfig').onclick=async()=>{const c={url:$('sbUrl').value.trim(),key:$('sbKey').value.trim()};await setupCloud(c)};
+$('signUp').onclick=async()=>{
+ if(!await ensureCloud())return;
+ const email=$('sbEmail').value.trim(),password=$('sbPassword').value;
+ if(password.length<8){alert('Придумай пароль минимум из 8 символов. Не отправляй его никому.');return}
+ const {data,error}=await sb.auth.signUp({email,password});
+ if(error){alert(error.message);return}
+ $('sbPassword').value='';
+ if(data.session)await activateAccount(data.session);
+ alert(data.session?'Аккаунт создан, вход выполнен.':'Проверь почту и подтверди регистрацию, затем войди.');
+};
+$('signIn').onclick=async()=>{
+ if(!await ensureCloud())return;
+ const {data,error}=await sb.auth.signInWithPassword({email:$('sbEmail').value.trim(),password:$('sbPassword').value});
+ $('sbPassword').value='';if(error){alert(error.message);return}
+ await activateAccount(data.session);
+};
+async function ensureCloud(){if(sb)return true;return setupCloud({url:$('sbUrl').value.trim(),key:$('sbKey').value.trim()})}
+$('signOut').onclick=async()=>{if(!sb)return;if(localPending()&&!confirm('Не все изменения отправлены в облако. Они останутся на устройстве, но не появятся на другом телефоне. Выйти?'))return;const {error}=await sb.auth.signOut();if(error)alert(error.message);else leaveAccount()};
+$('syncNow').onclick=async()=>{if(!session){alert('Сначала войди в аккаунт');return}if(cloudConflict){alert('Конфликт версий. Сначала сохрани экспорт JSON и проверь данные перед выбором облачной версии.');return}if(!localPending()){setMessage('Все локальные изменения уже отправлены в облако.');return}await uploadPending()};
+$('pullCloud').onclick=pullCloud;
+$('importGuest').onclick=()=>{
+ if(!session)return;
+ if(cloudRevision>0){alert('В облаке уже есть данные. Чтобы не потерять их, сначала экспортируй обе версии в JSON. Автоматический перенос разрешён только в пустой аккаунт.');return}
+ const guest=readStorage(GUEST_KEY);
+ if(!confirm('Перенести гостевые записи с этого устройства в новый аккаунт? Текущие данные пустого профиля будут заменены. Гостевая копия останется на устройстве.'))return;
+ state=guest;save();alert('Гостевые записи скопированы. Дождись сообщения об успешной синхронизации.');
+};
+// Restore the previous public (non-secret) connection settings.
+const oldCloud=(()=>{try{return JSON.parse(localStorage.getItem(GUEST_KEY)||'{}').cloud||{}}catch{return {}}})();
+const initialConfig=getConfig();
+if(!initialConfig.url&&oldCloud.url&&oldCloud.key){localStorage.setItem(CONFIG_KEY,JSON.stringify({url:oldCloud.url,key:oldCloud.key}))}
+const bootstrapConfig=getConfig();
+if(bootstrapConfig.url&&bootstrapConfig.key)setupCloud(bootstrapConfig);
 if('serviceWorker'in navigator&&location.protocol.startsWith('http'))navigator.serviceWorker.register('./sw.js').catch(()=>{});
 window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('installBtn').hidden=false});$('installBtn').onclick=async()=>{if(installPrompt){installPrompt.prompt();await installPrompt.userChoice;installPrompt=null;$('installBtn').hidden=true}};
 $('wDate').value=today();renderAll();
