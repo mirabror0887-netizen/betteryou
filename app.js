@@ -149,7 +149,11 @@ function renderSettings(){
  $('importGuest').disabled=!session||cloudBusy;
 }
 // BetterYou 2.2: personalised onboarding. No changes to existing users until they opt in.
-const activityFactors={sedentary:1.2,light:1.375,moderate:1.55,high:1.725};
+// BetterYou 2.3: evidence-informed estimates for healthy adults (not a diagnosis).
+// Mifflin–St Jeor RMR (1990); daily activity is EXCLUDING workouts by questionnaire design.
+// Exercise estimate uses NET expenditure: (MET 3.5 - resting MET 1) × kg × 0.75 h × sessions/7.
+const activityFactors={sedentary:1.20,light:1.35,moderate:1.50,high:1.65};
+const trainingSessions={'0':0,'1':1.5,'3':3.5,'5':5.5};
 let suggestedPlan=null;
 function onboardingHasExistingRecords(d){return !!(d.weights.length||d.foods.length||d.dailySteps.length||d.lifts.length||d.shopping.length||d.profile.age||d.profile.height||d.profile.weight)}
 function openOnboarding(){
@@ -165,26 +169,52 @@ function openOnboarding(){
 }
 function calculatePlan(a){
  const age=Number(a.age),height=Number(a.height),weight=Number(a.weight);
- if(!Number.isFinite(age)||age<18||age>100||!Number.isFinite(height)||height<120||height>230||!Number.isFinite(weight)||weight<30||weight>300)throw Error('Проверь возраст, рост и вес. Расчёт предназначен только для взрослых.');
- if(!(a.activity in activityFactors))throw Error('Выбери уровень активности.');
- if(!['male','female','unknown'].includes(a.sex))throw Error('Выбери вариант физиологического параметра.');
- const constant=a.sex==='male'?5:a.sex==='female'?-161:-78;
- // Mifflin-St Jeor: resting metabolism; combine everyday activity and a modest training increment.
- const bmr=10*weight+6.25*height-5*age+constant;
- const trainingAdjustment={0:0,1:0.025,3:0.06,5:0.10}[a.trainingFrequency]??0;
- const tdee=Math.round(bmr*(activityFactors[a.activity]+trainingAdjustment));
- const factors={lose:0.88,maintain:1,gain:1.08,recomp:0.98};
- if(!(a.goal in factors))throw Error('Выбери цель.');
- // Conservative guardrails, not individual medical minima.
- const floor=a.sex==='male'?1500:a.sex==='female'?1200:1350;
- const calories=Math.round(Math.max(floor,tdee*factors[a.goal])/25)*25;
- const proteinPerKg=({lose:1.8,maintain:1.5,gain:1.8,recomp:1.8})[a.goal];
- const protein=Math.round(Math.min(200,weight*proteinPerKg));
- const fat=Math.round(Math.max(40,0.8*weight));
+ if(!Number.isFinite(age)||age<18||age>100||!Number.isFinite(height)||height<120||height>230||!Number.isFinite(weight)||weight<30||weight>300)throw Error('Проверь возраст, рост и вес. Автоматический расчёт только для взрослых 18+.');
+ if(!Object.hasOwn(activityFactors,a.activity))throw Error('Выбери уровень активности.');
+ if(!Object.hasOwn(trainingSessions,String(a.trainingFrequency)))throw Error('Выбери частоту тренировок.');
+ if(!['male','female','unknown'].includes(a.sex))throw Error('Выбери физиологический параметр для формулы.');
+ if(!['lose','maintain','gain','recomp'].includes(a.goal))throw Error('Выбери цель.');
+ const bmi=weight/((height/100)**2);
+ if(a.goal==='lose'&&bmi<18.5)throw Error('При ИМТ ниже 18,5 автоматический дефицит калорий не рассчитываем. Лучше обсудить цель со специалистом.');
+ const constants={male:5,female:-161,unknown:-78}; // unknown = rough midpoint only, not a biological third equation
+ const bmrExact=10*weight+6.25*height-5*age+constants[a.sex];
+ const activityMultiplier=activityFactors[a.activity];
+ const sessions=trainingSessions[String(a.trainingFrequency)];
+ const workoutCalories=Math.round((3.5-1)*0.75*weight*sessions/7); // example resistance-training, 45 min/session
+ const tdee=Math.round(bmrExact*activityMultiplier+workoutCalories);
+ const goalFactor={lose:bmi<20?0.95:0.88,maintain:1,gain:1.07,recomp:1}[a.goal];
+ let calories=Math.round(tdee*goalFactor/25)*25;
+ const messages=[];
+ if(a.sex==='unknown')messages.push('Без физиологического параметра использована условная середина двух вариантов формулы. Погрешность может быть существенной.');
+ if(a.goal==='lose'){
+  const threshold=a.sex==='female'?1200:1500; // simplified precaution, not a medical threshold
+  if(calories<threshold){
+   if(tdee<=threshold)throw Error('Расчётный расход слишком низок для автоматического назначения дефицита. Выбери поддержание или обсуди план со специалистом.');
+   calories=threshold;
+   messages.push('Дефицит ограничен консервативным порогом; это не гарантия безопасности для конкретного человека.');
+  }
+  if(bmi<20)messages.push('ИМТ ближе к нижней границе нормы: выбран только небольшой дефицит 5%; цель стоит проверить со специалистом.');
+ }
+ // At higher body weight, do not blindly prescribe protein based on full body mass.
+ const bmi25Weight=25*(height/100)**2;
+ const referenceWeight=bmi>30?bmi25Weight+0.25*(weight-bmi25Weight):weight;
+ if(bmi>30)messages.push('Для расчёта белка использована скорректированная масса тела; это приближённый подход при высоком ИМТ.');
+ const proteinPerKg=({lose:1.8,maintain:sessions>0?1.5:1.2,gain:1.8,recomp:1.8})[a.goal];
+ const recommendedProtein=Math.round(referenceWeight*proteinPerKg);
+ // Respect broad adult AMDR bands as much as possible: protein <=35% energy,
+ // fat ~25-30% (never <20%), carbs >=45%; rest allocated to carbohydrates.
+ const maxProtein=Math.floor(calories*0.35/4);
+ let protein=Math.min(recommendedProtein,maxProtein);
+ const minFat=Math.ceil(calories*0.20/9);
+ const fatPreferred=Math.round(Math.max(calories*0.25/9,Math.min(referenceWeight*0.8,calories*0.30/9)));
+ const fatBudget=Math.floor((calories*0.55-protein*4)/9);
+ let fat=Math.max(minFat,Math.min(fatPreferred,fatBudget));
+ if(fatBudget<minFat){protein=Math.min(protein,Math.floor((calories*0.55-minFat*9)/4));fat=minFat;}
  const carbs=Math.round((calories-protein*4-fat*9)/4);
- if(carbs<70)throw Error('По указанным данным автоматический расчёт не даёт сбалансированного распределения. Пожалуйста, проверь значения или настрой питание со специалистом.');
+ if(protein<recommendedProtein)messages.push('При данной калорийности расчётный белок ограничен, чтобы сохранить место для жиров и углеводов.');
+ if(calories<1600)messages.push('На низкой калорийности труднее покрывать потребности в питательных веществах. План стоит проверить со специалистом.');
  const steps=({sedentary:6000,light:7500,moderate:9000,high:10000})[a.activity];
- return {calories,protein,fat,carbs,steps,tdee,goal:a.goal};
+ return {calories,protein,fat,carbs,steps,tdee,bmr:Math.round(bmrExact),activityMultiplier,workoutCalories,referenceWeight:Math.round(referenceWeight),proteinPerKg,goalFactor,bmi:Math.round(bmi*10)/10,goal:a.goal,messages,formulaVersion:'2.3-mifflin'};
 }
 $('reopenOnboarding').onclick=openOnboarding;
 $('cancelOnboarding').onclick=()=>go('settings');
@@ -193,7 +223,7 @@ $('onboardingForm').onsubmit=e=>{
  const answers={name:$('obName').value.trim(),age:$('obAge').value,height:$('obHeight').value,weight:$('obWeight').value,sex:$('obSex').value,activity:$('obActivity').value,trainingFrequency:$('obTraining').value,goal:$('obGoal').value,diet:$('obDiet').value};
  try{
   const plan=calculatePlan(answers);suggestedPlan={answers,plan};
-  $('onboardingResult').innerHTML=`<p class="tag">Персональный ориентир</p><div class="metric" style="margin:15px 0">${plan.calories} <small>ккал / день</small></div><div class="stats" style="grid-template-columns:repeat(2,minmax(0,1fr))"><div class="stat"><div class="sub">Белки</div><div class="metric">${plan.protein} <small>г</small></div></div><div class="stat"><div class="sub">Жиры</div><div class="metric">${plan.fat} <small>г</small></div></div><div class="stat"><div class="sub">Углеводы</div><div class="metric">${plan.carbs} <small>г</small></div></div><div class="stat"><div class="sub">Шаги</div><div class="metric">${plan.steps.toLocaleString('ru-RU')}</div></div></div><p class="small muted" style="margin-top:14px">Оценка поддерживающей калорийности: около ${plan.tdee} ккал. Реальная потребность может отличаться. Учитывай самочувствие и наблюдай тенденцию 2–3 недели.</p>`;
+  $('onboardingResult').innerHTML=`<p class="tag">Персональный ориентир · Mifflin–St Jeor</p><div class="metric" style="margin:15px 0">${plan.calories} <small>ккал / день</small></div><div class="stats" style="grid-template-columns:repeat(2,minmax(0,1fr))"><div class="stat"><div class="sub">Белки</div><div class="metric">${plan.protein} <small>г</small></div></div><div class="stat"><div class="sub">Жиры</div><div class="metric">${plan.fat} <small>г</small></div></div><div class="stat"><div class="sub">Углеводы</div><div class="metric">${plan.carbs} <small>г</small></div></div><div class="stat"><div class="sub">Шаги</div><div class="metric">${plan.steps.toLocaleString('ru-RU')}</div></div></div><details style="margin-top:14px" open><summary><b>Как получены цифры</b></summary><p class="small muted">Основной обмен (BMR): <b>${plan.bmr} ккал</b> — по формуле Миффлина — Сан Жеора.</p><p class="small muted">Повседневная активность: × ${plan.activityMultiplier.toFixed(2)}; отдельная оценка тренировок: +${plan.workoutCalories} ккал/день. Поддержание (TDEE): <b>≈ ${plan.tdee} ккал</b>.</p><p class="small muted">Поправка под цель: ${Math.round((plan.goalFactor-1)*100)}%. Белок рассчитан из ${plan.referenceWeight} кг (${plan.proteinPerKg} г/кг), с учётом доли калорий; жиры ориентир 20–35% калорий, углеводы — остаток. БЖУ: 4/9/4 ккал на грамм.</p>${plan.messages.map(m=>`<p class="notice">${esc(m)}</p>`).join('')}</details><p class="small muted" style="margin-top:12px">Это первоначальная оценка для взрослых, а не медицинская норма. Тренировки считаются как примерные 45-минутные занятия средней интенсивности. По тенденции веса за 2–4 недели можно уточнить ориентир.</p>`;
   $('applyOnboarding').classList.remove('hide');
  }catch(err){suggestedPlan=null;$('applyOnboarding').classList.add('hide');$('onboardingResult').textContent=err.message}
 };
@@ -201,7 +231,7 @@ $('onboardingForm').addEventListener('input',()=>{$('applyOnboarding').classList
 $('applyOnboarding').onclick=()=>{
  if(!suggestedPlan)return;
  const {answers,plan}=suggestedPlan;
- state.profile={...state.profile,...answers,age:Number(answers.age),height:Number(answers.height),weight:Number(answers.weight),calories:plan.calories,protein:plan.protein,fat:plan.fat,steps:plan.steps,onboardingCompleted:true,onboardingAt:new Date().toISOString()};
+ state.profile={...state.profile,...answers,age:Number(answers.age),height:Number(answers.height),weight:Number(answers.weight),calories:plan.calories,protein:plan.protein,fat:plan.fat,steps:plan.steps,planMethod:plan.formulaVersion,planTdee:plan.tdee,onboardingCompleted:true,onboardingAt:new Date().toISOString()};
  save();suggestedPlan=null;go('home');alert('Персональный план сохранён! Его можно изменить в настройках.');
 };
 
