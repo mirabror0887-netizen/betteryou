@@ -436,6 +436,32 @@ function foodEntry(item,amount,date,meal){
  const scaled=v=>Math.round((Number(v)||0)*factor*10)/10;
  return {id:uid(),date,name:item.name,meal,kcal:scaled(item.kcal),p:scaled(item.p),f:scaled(item.f),c:scaled(item.c),quantity:amount,quantityUnit:item.unit,sourceId:item.id};
 }
+let lastFoodAddedId=null;
+function chooseFoodFromQuick(id){
+ const f=allFoods().find(item=>item.id===id);if(!f)return;
+ $('foodFavoritesOnly').checked=false;$('foodSearch').value=f.name;
+ renderFoodOptions();$('foodSelect').value=f.id;updateFoodSelection();
+ $('foodSelect').focus();
+}
+function renderFoodRecent(){
+ const container=$('foodRecent'),wrap=$('foodRecentWrap');if(!container||!wrap)return;
+ const found=[],seen=new Set(),lookup=new Map(allFoods().map(x=>[x.id,x]));
+ for(const entry of [...state.foods].slice().reverse()){
+  const id=entry.sourceId;if(!id||seen.has(id)||!lookup.has(id))continue;
+  seen.add(id);found.push(lookup.get(id));if(found.length>=5)break;
+ }
+ wrap.hidden=!found.length;
+ container.innerHTML=found.map(f=>`<button type="button" data-quickfood="${esc(f.id)}" title="Выбрать ${esc(f.name)}">${esc(f.name)}</button>`).join('');
+ container.querySelectorAll('[data-quickfood]').forEach(b=>b.onclick=()=>chooseFoodFromQuick(b.dataset.quickfood));
+}
+function renderFoodAmounts(){
+ const chosen=allFoods().find(f=>f.id===$('foodSelect').value),container=$('foodAmountPresets');
+ if(!container)return;
+ if(!chosen){container.innerHTML='';return}
+ const options=chosen.unit==='g'?[50,100,150,200]:[0.5,1,1.5,2],amount=Number($('foodServings').value);
+ container.innerHTML=options.map(n=>`<button type="button" data-foodamount="${n}" class="${n===amount?'active':''}">${n}${chosen.unit==='g'?' г':' порц.'}</button>`).join('');
+ container.querySelectorAll('button').forEach(b=>b.onclick=()=>{$('foodServings').value=b.dataset.foodamount;updateFoodSelection()});
+}
 function updateFoodSelection(){
  const chosen=allFoods().find(f=>f.id===$('foodSelect').value);
  const byGram=chosen?.unit==='g';
@@ -448,6 +474,7 @@ function updateFoodSelection(){
  $('foodFavorite').textContent=chosen&&state.favoriteFoods.includes(chosen.id)?'★ В избранном':'☆ В избранное';
  const amount=Number(input.value)||0;
  $('foodPreview').textContent=chosen&&amount>0?`${Math.round(chosen.kcal*amount/chosen.base)} ккал · Б ${Math.round(chosen.p*amount/chosen.base)} / Ж ${Math.round(chosen.f*amount/chosen.base)} / У ${Math.round(chosen.c*amount/chosen.base)} г`:'Выбери продукт и количество';
+ renderFoodAmounts();
 }
 function renderFoodOptions(){
  const prev=$('foodSelect').value;
@@ -461,25 +488,41 @@ function renderFoodOptions(){
  if(list.some(f=>f.id===prev))select.value=prev;
  $('foodSearchCount').textContent=`Найдено: ${list.length} · справочная база: ${foodCatalog.length} продуктов`;
  updateFoodSelection();
+ renderFoodRecent();
 }
 function renderFood(){
  $('foodDate').value ||= today();
  renderFoodOptions();
  const date=selectedFoodDate(),t=foodTotalsForDate(date),p=state.profile;
  $('foodDiaryTitle').textContent=date===today()?'Дневник за сегодня':'Дневник за '+date;
- $('foodTotals').innerHTML=`<div class="stats"><div class="stat"><div class="sub">Ккал</div><div class="metric">${Math.round(t.kcal)}</div></div><div class="stat"><div class="sub">Белки</div><div class="metric">${Math.round(t.p)} г</div></div><div class="stat"><div class="sub">Жиры</div><div class="metric">${Math.round(t.f)} г</div></div><div class="stat"><div class="sub">Углеводы</div><div class="metric">${Math.round(t.c)} г</div></div></div><div class="bar"><i style="width:${Math.min(100,p.calories?t.kcal/p.calories*100:0)}%"></i></div><p class="sub">${Math.max(0,(Number(p.calories)||0)-Math.round(t.kcal))} ккал до ориентира · цель ${p.calories} ккал</p>`;
+ const calorieGoal=Number(p.calories)||0,proteinGoal=Number(p.protein)||0,fatGoal=Number(p.fat)||0;
+ const carbsGoal=calorieGoal?Math.max(0,Math.round((calorieGoal-proteinGoal*4-fatGoal*9)/4)):0;
+ const summary=[['Калории',t.kcal,calorieGoal,'ккал'],['Белки',t.p,proteinGoal,'г'],['Жиры',t.f,fatGoal,'г'],['Углеводы',t.c,carbsGoal,'г']];
+ const energyStatus=!calorieGoal?'Укажи ориентир калорий в настройках.':t.kcal<=calorieGoal?`До ориентира: ${Math.round(calorieGoal-t.kcal)} ккал`:`Выше ориентира: ${Math.round(t.kcal-calorieGoal)} ккал`;
+ $('foodTotals').innerHTML=`<div class="food-energy-status">${esc(energyStatus)} · ориентиры приблизительные</div><div class="food-summary">${summary.map(([label,value,goal,unit])=>`<div><div class="food-summary-head"><b>${label}</b><span>${Math.round(value)}${goal?' / '+Math.round(goal):''} ${unit}</span></div><div class="bar"><i style="width:${goal?Math.min(100,Math.max(0,value/goal*100)):0}%"></i></div></div>`).join('')}</div>`;
  const entries=foodsForDate(date);
- $('foodDiary').innerHTML=entries.length?entries.map(f=>`<div class="listitem row between"><div><b>${esc(f.name)}</b><div class="sub">${esc(f.meal)}${f.quantity!=null?' · '+esc(f.quantity)+' '+(f.quantityUnit==='g'?'г':'порц.'):''} · Б ${Math.round(f.p)} / Ж ${Math.round(f.f)} / У ${Math.round(f.c)} г</div></div><div class="row"><b>${Math.round(f.kcal)} ккал</b><button type="button" class="danger" data-food="${esc(f.id)}" aria-label="Удалить запись">×</button></div></div>`).join(''):'<p class="muted">Пока ничего не добавлено на выбранную дату.</p>';
+ const mealOrder=['Завтрак','Обед','Ужин','Перекус'];
+ $('foodDiary').innerHTML=entries.length?mealOrder.concat([...new Set(entries.map(f=>f.meal))].filter(m=>!mealOrder.includes(m))).map(meal=>{
+ const mealEntries=entries.filter(f=>f.meal===meal);if(!mealEntries.length)return '';
+ return `<div class="food-diary-meal">${esc(meal)}</div>`+mealEntries.map(f=>`<div class="listitem row between"><div><b>${esc(f.name)}</b><div class="sub">${f.quantity!=null?esc(f.quantity)+' '+(f.quantityUnit==='g'?'г':'порц.')+' · ':''}Б ${Math.round(f.p)} / Ж ${Math.round(f.f)} / У ${Math.round(f.c)} г</div></div><div class="row"><b>${Math.round(f.kcal)} ккал</b><button type="button" class="danger" data-food="${esc(f.id)}" aria-label="Удалить запись">×</button></div></div>`).join('')}).join(''):'<p class="muted">Пока ничего не добавлено на выбранную дату.</p>';
  $('foodDiary').querySelectorAll('[data-food]').forEach(b=>b.onclick=()=>{if(!confirm('Удалить эту запись из дневника?'))return;state.foods=state.foods.filter(f=>f.id!==b.dataset.food);save()});
  $('recipes').innerHTML=state.recipes.map((r,i)=>`<article class="recipe"><div class="foodimg">${['🍗','🍝','🥣','🐟','🫐','🥩'][i%6]}</div><h3>${esc(r.name)}</h3><p>${r.kcal} ккал · Б ${r.p} г · ${r.min} мин</p><details><summary>Ингредиенты и рецепт</summary><p><b>Ингредиенты</b><br>${r.ingredients.map(esc).join('<br>')}</p><p>${esc(r.steps)}</p></details><button class="secondary" style="width:100%;margin-top:10px" data-addrecipe="${i}">Добавить порцию</button></article>`).join('');
  $('recipes').querySelectorAll('[data-addrecipe]').forEach(b=>b.onclick=()=>{const r=state.recipes[+b.dataset.addrecipe];state.foods.push(foodEntry({...r,id:'r'+b.dataset.addrecipe,base:1,unit:'portion'},1,date,'Перекус'));save()});
  renderPersonalFoods();
+ if(lastFoodAddedId&&!state.foods.some(f=>f.id===lastFoodAddedId)){lastFoodAddedId=null;$('foodUndoWrap').hidden=true}
 }
 $('foodSearch').addEventListener('input',renderFoodOptions);
 $('foodFavoritesOnly').addEventListener('change',renderFoodOptions);
 $('foodSelect').addEventListener('change',updateFoodSelection);
 $('foodServings').addEventListener('input',updateFoodSelection);
 $('foodDate').addEventListener('change',renderFood);
+$('foodUndo').onclick=()=>{
+ if(!lastFoodAddedId)return;
+ const oldLen=state.foods.length;
+ state.foods=state.foods.filter(item=>item.id!==lastFoodAddedId);
+ if(state.foods.length<oldLen){lastFoodAddedId=null;save();$('foodAddedStatus').textContent='Последнее добавление отменено.';}
+ $('foodUndoWrap').hidden=true;
+};
 $('foodFavorite').onclick=()=>{
  const id=$('foodSelect').value;if(!id)return;
  const ids=new Set(state.favoriteFoods);
@@ -525,6 +568,7 @@ function chooseSavedBarcode(code){
  $('foodSearch').value=item.name;
  renderFoodOptions();$('foodSelect').value=item.id||'bc'+code;
  $('foodServings').value='100';$('foodServings').dataset.unit='g';updateFoodSelection();
+ applyFoodMode('search');
  return true;
 }
 async function lookupBarcode(raw){
@@ -716,6 +760,7 @@ $('personalFoodForm').onsubmit=e=>{
  resetPersonalFoodEditor();save();
  $('foodFavoritesOnly').checked=false;$('foodSearch').value=entry.name;renderFoodOptions();$('foodSelect').value=entry.id;updateFoodSelection();
  $('personalFoodMessage').textContent='Продукт сохранён. Он доступен в поиске и синхронизируется с аккаунтом.';
+ applyFoodMode('search');$('foodAddedStatus').textContent='Продукт сохранён. Теперь укажи количество и добавь в дневник.';
 };
 function deletePersonalFood(id){
  const source=findManagedFood(id);if(!source)return;
@@ -961,9 +1006,20 @@ $('foodForm').onsubmit=e=>{
  e.preventDefault();const f=allFoods().find(x=>x.id===$('foodSelect').value);
  const amount=Number($('foodServings').value);if(!f||!Number.isFinite(amount)||amount<=0||amount>(f.unit==='g'?3000:10)){alert('Выбери продукт и корректное количество.');return}
  const date=selectedFoodDate();if(!/^\d{4}-\d{2}-\d{2}$/.test(date)){alert('Проверь дату.');return}
- state.foods.push(foodEntry(f,amount,date,$('mealType').value));save();
+ const entry=foodEntry(f,amount,date,$('mealType').value);
+ state.foods.push(entry);lastFoodAddedId=entry.id;save();
+ $('foodAddedStatus').textContent=`Добавлено: ${f.name} · ${Math.round(entry.kcal)} ккал`;
+ $('foodUndoWrap').hidden=false;
+
 };
-$('customFoodForm').onsubmit=e=>{e.preventDefault();state.customFoods.push({name:$('customName').value,kcal:+$('customKcal').value,p:+$('customP').value,f:+$('customF').value,c:+$('customC').value,min:0,ingredients:[],steps:'Пользовательское блюдо'});save();e.target.reset()};
+$('customFoodForm').onsubmit=e=>{
+ e.preventDefault();const name=$('customName').value.trim(),kcal=Number($('customKcal').value),p=Number($('customP').value),f=Number($('customF').value),c=Number($('customC').value);
+ if(!name||name.length>120||[kcal,p,f,c].some(n=>!Number.isFinite(n)||n<0||n>5000)){alert('Проверь название и КБЖУ на порцию.');return}
+ const item={name,kcal,p,f,c,min:0,ingredients:[],steps:'Пользовательское блюдо'};
+ state.customFoods.push(item);const id='c'+(state.customFoods.length-1);save();e.target.reset();
+ applyFoodMode('search');$('foodFavoritesOnly').checked=false;$('foodSearch').value=name;renderFoodOptions();$('foodSelect').value=id;updateFoodSelection();
+ $('foodAddedStatus').textContent='Блюдо сохранено. Выбери количество и добавь его в дневник.';
+};
 $('clearFood').onclick=()=>{const date=selectedFoodDate();if(confirm('Удалить ВСЕ записи питания за '+date+'?')){state.foods=state.foods.filter(f=>f.date!==date);save()}};
 $('shoppingForm').onsubmit=e=>{e.preventDefault();state.shopping.push({name:$('shoppingInput').value.trim(),done:false});save();e.target.reset()};
 $('generateList').onclick=()=>{let ingredients=[...new Set(state.recipes.slice(0,4).flatMap(r=>r.ingredients))];state.shopping.push(...ingredients.map(name=>({name,done:false})));save()};
