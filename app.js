@@ -51,7 +51,7 @@ function save(){
  renderAll();
 }
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function go(tab){document.querySelectorAll('.tabscreen').forEach(x=>x.classList.toggle('active',x.id===tab));document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('active',x.dataset.tab===tab));window.scrollTo({top:0,behavior:'smooth'});if(tab==='training')renderTraining()}
+function go(tab){document.querySelectorAll('.tabscreen').forEach(x=>x.classList.toggle('active',x.id===tab));document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('active',x.dataset.tab===tab));window.scrollTo({top:0,behavior:'smooth'});if(tab==='training')renderTraining();if(tab==='food')applyFoodMode(currentFoodMode);if(tab==='training')applyTrainingMode(currentTrainingMode)}
 document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>go(b.dataset.tab));
 // Steps 2.1: preserve legacy step entries stored alongside weight measurements.
 function stepsFor(date){
@@ -274,7 +274,7 @@ for(const secs of [60,90,120,180])$('trainingRest'+secs).onclick=()=>startTraini
 $('trainingTimerPause').onclick=()=>{if(trainingTimerUntil){trainingTimerLeft=Math.max(0,Math.ceil((trainingTimerUntil-Date.now())/1000));trainingTimerUntil=0}else if(trainingTimerLeft){trainingTimerUntil=Date.now()+trainingTimerLeft*1000}renderTrainingTimer()};
 $('trainingTimerReset').onclick=()=>{trainingTimerUntil=0;trainingTimerLeft=0;renderTrainingTimer()};
 trainingTimerHandle=setInterval(renderTrainingTimer,1000);
-$('trainingStart').onclick=()=>{if(trainingSessionDraft())return alert('Заверши или отмени текущую тренировку.');const d=trainingCurrentDay();state.profile.trainingDraft={id:uid(),date:today(),startedAt:new Date().toISOString(),key:d.key,name:d.name};save()};
+$('trainingStart').onclick=()=>{applyTrainingMode('session');if(trainingSessionDraft())return alert('Заверши или отмени текущую тренировку.');const d=trainingCurrentDay();state.profile.trainingDraft={id:uid(),date:today(),startedAt:new Date().toISOString(),key:d.key,name:d.name};save()};
 $('trainingFinish').onclick=()=>{const d=trainingSessionDraft();if(!d)return;const sets=state.lifts.filter(x=>x.sessionId===d.id);if(!sets.length&&!confirm('Подходы не записаны. Всё равно завершить тренировку?'))return;
  const duration=Math.max(1,Math.round((Date.now()-new Date(d.startedAt).getTime())/60000));
  state.trainingSessions.unshift({id:d.id,date:today(),name:d.name,sets:sets.length,duration,finishedAt:new Date().toISOString()});delete state.profile.trainingDraft;save()};
@@ -528,6 +528,7 @@ $('barcodeNameFallback').onclick=()=>{
  // Fresh produce often has no consumer barcode; our offline food database already has fruit and vegetables.
  void stopBarcodeCamera();
  go('food');
+ applyFoodMode('search');
  const search=$('foodSearch');
  search.focus();search.scrollIntoView({behavior:'smooth',block:'center'});
  barcodeStatus('Ищи продукт по названию в поле ниже (например, «виноград»), затем укажи граммы. Для весовых товаров штрихкод не нужен.');
@@ -662,7 +663,7 @@ function openPersonalFoodEditor(id=null){
 function resetPersonalFoodEditor(){
  editingPersonalFoodId=null;$('personalFoodEditor').hidden=true;$('personalFoodForm').reset();
 }
-$('addPersonalFood').onclick=()=>openPersonalFoodEditor();
+$('addPersonalFood').onclick=()=>{applyFoodMode('mine');openPersonalFoodEditor();};
 $('cancelPersonalFood').onclick=resetPersonalFoodEditor;
 $('personalFoodForm').onsubmit=e=>{
  e.preventDefault();
@@ -918,7 +919,16 @@ $('applyOnboarding').onclick=()=>{
  save();suggestedPlan=null;go('home');alert('Персональный план сохранён! Его можно изменить в настройках.');
 };
 
-function renderAll(){renderHome();renderWeights();renderTraining();renderFood();renderShopping();renderSteps();renderWeeklyPlanner();renderSettings()}
+
+let currentFoodMode='search',currentTrainingMode='plan';
+function setActiveButtons(container,mode){if(!container)return;container.querySelectorAll('button[data-mode]').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode))}
+function applyFoodMode(mode){currentFoodMode=mode||'search';const tabs=$('foodModeTabs');setActiveButtons(tabs,currentFoodMode);const mapping={search:['foodPanel_search'],scan:['foodPanel_scan'],manual:['foodPanel_manual'],mine:['personalFoodBox']};['foodPanel_search','foodPanel_scan','foodPanel_manual','personalFoodBox'].forEach(id=>{const el=$(id);if(el)el.hidden=!(mapping[currentFoodMode]||[]).includes(id)});if(currentFoodMode==='mine'&&$('addPersonalFood'))$('addPersonalFood').scrollIntoView({block:'center',behavior:'smooth'})}
+function applyTrainingMode(mode){currentTrainingMode=mode||'plan';const tabs=$('trainingModeTabs');setActiveButtons(tabs,currentTrainingMode);document.querySelectorAll('[data-train-panel]').forEach(el=>el.hidden=el.dataset.trainPanel!==currentTrainingMode)}
+function initUiRefresh(){const foodTabs=$('foodModeTabs');if(foodTabs&&!foodTabs.dataset.ready){foodTabs.dataset.ready='1';foodTabs.querySelectorAll('button[data-mode]').forEach(b=>b.onclick=()=>applyFoodMode(b.dataset.mode));}
+ const trainTabs=$('trainingModeTabs');if(trainTabs&&!trainTabs.dataset.ready){trainTabs.dataset.ready='1';trainTabs.querySelectorAll('button[data-mode]').forEach(b=>b.onclick=()=>applyTrainingMode(b.dataset.mode));}
+ applyFoodMode(currentFoodMode);applyTrainingMode(currentTrainingMode);
+}
+function renderAll(){renderHome();renderWeights();renderTraining();renderFood();renderShopping();renderSteps();renderWeeklyPlanner();renderSettings();initUiRefresh()}
 $('weightForm').onsubmit=e=>{e.preventDefault();let entry={date:$('wDate').value,weight:+$('wWeight').value,waist:+$('wWaist').value||null,steps:+$('wSteps').value||null};state.weights=state.weights.filter(x=>x.date!==entry.date);state.weights.push(entry);state.profile.weight=entry.weight;if($('wSteps').value!==''){state.dailySteps=state.dailySteps.filter(x=>x.date!==entry.date);state.dailySteps.push({date:entry.date,steps:entry.steps||0})}save();e.target.reset();$('wDate').value=today();};
 $('foodForm').onsubmit=e=>{
  e.preventDefault();const f=allFoods().find(x=>x.id===$('foodSelect').value);
