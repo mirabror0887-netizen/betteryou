@@ -148,6 +148,63 @@ function renderSettings(){
  $('pullCloud').disabled=!session||cloudBusy;
  $('importGuest').disabled=!session||cloudBusy;
 }
+// BetterYou 2.2: personalised onboarding. No changes to existing users until they opt in.
+const activityFactors={sedentary:1.2,light:1.375,moderate:1.55,high:1.725};
+let suggestedPlan=null;
+function onboardingHasExistingRecords(d){return !!(d.weights.length||d.foods.length||d.dailySteps.length||d.lifts.length||d.shopping.length||d.profile.age||d.profile.height||d.profile.weight)}
+function openOnboarding(){
+ const p=state.profile;
+ for(const [id,key] of [['obName','name'],['obAge','age'],['obHeight','height'],['obWeight','weight'],['obSex','sex'],['obActivity','activity'],['obTraining','trainingFrequency'],['obGoal','goal'],['obDiet','diet']]){
+  const el=$(id);if(!el)continue;
+  if(el.tagName==='SELECT')el.value=p[key]??(id==='obTraining'?'0':id==='obDiet'?'balanced':'');
+  else el.value=p[key]??'';
+ }
+ suggestedPlan=null;$('applyOnboarding').classList.add('hide');
+ $('onboardingResult').innerHTML='<p class="sub">Ответь на вопросы и нажми «Рассчитать мой КБЖУ».</p>';
+ go('onboarding');
+}
+function calculatePlan(a){
+ const age=Number(a.age),height=Number(a.height),weight=Number(a.weight);
+ if(!Number.isFinite(age)||age<18||age>100||!Number.isFinite(height)||height<120||height>230||!Number.isFinite(weight)||weight<30||weight>300)throw Error('Проверь возраст, рост и вес. Расчёт предназначен только для взрослых.');
+ if(!(a.activity in activityFactors))throw Error('Выбери уровень активности.');
+ if(!['male','female','unknown'].includes(a.sex))throw Error('Выбери вариант физиологического параметра.');
+ const constant=a.sex==='male'?5:a.sex==='female'?-161:-78;
+ // Mifflin-St Jeor: resting metabolism; combine everyday activity and a modest training increment.
+ const bmr=10*weight+6.25*height-5*age+constant;
+ const trainingAdjustment={0:0,1:0.025,3:0.06,5:0.10}[a.trainingFrequency]??0;
+ const tdee=Math.round(bmr*(activityFactors[a.activity]+trainingAdjustment));
+ const factors={lose:0.88,maintain:1,gain:1.08,recomp:0.98};
+ if(!(a.goal in factors))throw Error('Выбери цель.');
+ // Conservative guardrails, not individual medical minima.
+ const floor=a.sex==='male'?1500:a.sex==='female'?1200:1350;
+ const calories=Math.round(Math.max(floor,tdee*factors[a.goal])/25)*25;
+ const proteinPerKg=({lose:1.8,maintain:1.5,gain:1.8,recomp:1.8})[a.goal];
+ const protein=Math.round(Math.min(200,weight*proteinPerKg));
+ const fat=Math.round(Math.max(40,0.8*weight));
+ const carbs=Math.round((calories-protein*4-fat*9)/4);
+ if(carbs<70)throw Error('По указанным данным автоматический расчёт не даёт сбалансированного распределения. Пожалуйста, проверь значения или настрой питание со специалистом.');
+ const steps=({sedentary:6000,light:7500,moderate:9000,high:10000})[a.activity];
+ return {calories,protein,fat,carbs,steps,tdee,goal:a.goal};
+}
+$('reopenOnboarding').onclick=openOnboarding;
+$('cancelOnboarding').onclick=()=>go('settings');
+$('onboardingForm').onsubmit=e=>{
+ e.preventDefault();
+ const answers={name:$('obName').value.trim(),age:$('obAge').value,height:$('obHeight').value,weight:$('obWeight').value,sex:$('obSex').value,activity:$('obActivity').value,trainingFrequency:$('obTraining').value,goal:$('obGoal').value,diet:$('obDiet').value};
+ try{
+  const plan=calculatePlan(answers);suggestedPlan={answers,plan};
+  $('onboardingResult').innerHTML=`<p class="tag">Персональный ориентир</p><div class="metric" style="margin:15px 0">${plan.calories} <small>ккал / день</small></div><div class="stats" style="grid-template-columns:repeat(2,minmax(0,1fr))"><div class="stat"><div class="sub">Белки</div><div class="metric">${plan.protein} <small>г</small></div></div><div class="stat"><div class="sub">Жиры</div><div class="metric">${plan.fat} <small>г</small></div></div><div class="stat"><div class="sub">Углеводы</div><div class="metric">${plan.carbs} <small>г</small></div></div><div class="stat"><div class="sub">Шаги</div><div class="metric">${plan.steps.toLocaleString('ru-RU')}</div></div></div><p class="small muted" style="margin-top:14px">Оценка поддерживающей калорийности: около ${plan.tdee} ккал. Реальная потребность может отличаться. Учитывай самочувствие и наблюдай тенденцию 2–3 недели.</p>`;
+  $('applyOnboarding').classList.remove('hide');
+ }catch(err){suggestedPlan=null;$('applyOnboarding').classList.add('hide');$('onboardingResult').textContent=err.message}
+};
+$('onboardingForm').addEventListener('input',()=>{$('applyOnboarding').classList.add('hide');suggestedPlan=null});
+$('applyOnboarding').onclick=()=>{
+ if(!suggestedPlan)return;
+ const {answers,plan}=suggestedPlan;
+ state.profile={...state.profile,...answers,age:Number(answers.age),height:Number(answers.height),weight:Number(answers.weight),calories:plan.calories,protein:plan.protein,fat:plan.fat,steps:plan.steps,onboardingCompleted:true,onboardingAt:new Date().toISOString()};
+ save();suggestedPlan=null;go('home');alert('Персональный план сохранён! Его можно изменить в настройках.');
+};
+
 function renderAll(){renderHome();renderWeights();renderTraining();renderFood();renderShopping();renderSteps();renderSettings()}
 $('weightForm').onsubmit=e=>{e.preventDefault();let entry={date:$('wDate').value,weight:+$('wWeight').value,waist:+$('wWaist').value||null,steps:+$('wSteps').value||null};state.weights=state.weights.filter(x=>x.date!==entry.date);state.weights.push(entry);state.profile.weight=entry.weight;if($('wSteps').value!==''){state.dailySteps=state.dailySteps.filter(x=>x.date!==entry.date);state.dailySteps.push({date:entry.date,steps:entry.steps||0})}save();e.target.reset();$('wDate').value=today();};
 $('foodForm').onsubmit=e=>{e.preventDefault();let f=allFoods().find(x=>x.id===$('foodSelect').value);if(!f)return;let n=+$('foodServings').value;state.foods.push({id:uid(),date:today(),name:f.name,meal:$('mealType').value,kcal:f.kcal*n,p:f.p*n,f:f.f*n,c:f.c*n});save();};
@@ -213,7 +270,7 @@ async function activateAccount(nextSession){
   state=cleanData(data.data);cloudRevision=remoteRev;
   localStorage.setItem(versionKey(id),String(remoteRev));localStorage.setItem(userKey(id),JSON.stringify(publicData()));
   cloudMessage='Данные загружены из облака. Автосинхронизация включена.';renderAll();
- }else{cloudRevision=0;cloudMessage='Новый пустой профиль. Гостевые записи можно перенести отдельной кнопкой.';renderAll()}
+ }else{cloudRevision=0;cloudMessage='Новый пустой профиль. Гостевые записи можно перенести отдельной кнопкой.';renderAll();if(!onboardingHasExistingRecords(state)&&!onboardingHasExistingRecords(readStorage(GUEST_KEY)))openOnboarding()}
 }
 async function uploadPending(){
  if(!sb||!session||!activeUserId||cloudConflict||cloudBusy||!localPending())return;
