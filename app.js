@@ -51,7 +51,16 @@ function save(){
  renderAll();
 }
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function go(tab){document.querySelectorAll('.tabscreen').forEach(x=>x.classList.toggle('active',x.id===tab));document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('active',x.dataset.tab===tab));window.scrollTo({top:0,behavior:'smooth'});if(tab==='training')renderTraining();if(tab==='food')applyFoodMode(currentFoodMode);if(tab==='training')applyTrainingMode(currentTrainingMode)}
+function go(tab){
+ if(!$(tab))return;
+ if(tab!=='food'&&typeof currentFoodMode!=='undefined'&&currentFoodMode==='scan'&&typeof stopBarcodeCamera==='function')void stopBarcodeCamera();
+ document.querySelectorAll('.tabscreen').forEach(x=>x.classList.toggle('active',x.id===tab));
+ document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('active',x.dataset.tab===tab));
+ document.querySelectorAll('[data-dock-route]').forEach(x=>x.classList.toggle('active',x.dataset.dockRoute===tab));
+ closeSheets();window.scrollTo({top:0,behavior:'instant'});
+ if(tab==='training'){renderTraining();applyTrainingMode(currentTrainingMode)}
+ if(tab==='food')applyFoodMode(currentFoodMode);
+}
 document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>go(b.dataset.tab));
 // Steps 2.1: preserve legacy step entries stored alongside weight measurements.
 function stepsFor(date){
@@ -96,24 +105,42 @@ function todayFoods(){return foodsForDate(today())}
 function foodTotalsForDate(date){return foodsForDate(date).reduce((a,f)=>({kcal:a.kcal+(Number(f.kcal)||0),p:a.p+(Number(f.p)||0),f:a.f+(Number(f.f)||0),c:a.c+(Number(f.c)||0)}),{kcal:0,p:0,f:0,c:0})}
 function totals(){return foodTotalsForDate(today())}
 function renderHome(){
- $('todayLabel').textContent=new Date().toLocaleDateString('ru-RU',{weekday:'long',day:'numeric',month:'long'});
- const t=totals(), p=state.profile;
- const metrics=[['Калории',Math.round(t.kcal),p.calories,'ккал'],['Белки',Math.round(t.p),p.protein,'г'],['Жиры',Math.round(t.f),p.fat,'г'],['Углеводы',Math.round(t.c),Math.round((p.calories-p.protein*4-p.fat*9)/4),'г']];
- $('macroStats').innerHTML=metrics.map(([n,v,g,u])=>`<div class="stat"><div class="sub">${n}</div><div class="metric">${v}<small> / ${g} ${u}</small></div><div class="bar"><i style="width:${Math.min(100,g?v/g*100:0)}%"></i></div></div>`).join('');
- const latest=[...state.weights].sort((a,b)=>a.date.localeCompare(b.date));drawChart(latest);
- if(latest.length>1){let d=latest[latest.length-1].weight-latest[0].weight;$('weightDelta').textContent=(d>0?'+':'')+d.toFixed(1)+' кг';}else $('weightDelta').textContent='Добавь записи';
- const todaySteps=stepsFor(today());
- const checks=[['Питание',todayFoods().length>0],['Тренировка',!!state.completed[today()]],['Шаги',todaySteps>=state.profile.steps]];
+ const now=new Date(),t=totals(),p=state.profile;
+ $('todayLabel').textContent=now.toLocaleDateString('ru-RU',{weekday:'long',day:'numeric',month:'long'});
+ const hour=now.getHours(),hello=hour<11?'Доброе утро':hour<17?'Добрый день':'Добрый вечер';
+ const firstName=String(p.name||'').trim().split(/\s+/)[0].slice(0,26);
+ $('homeGreeting').textContent=firstName?`${hello}, ${firstName}`:'Твой день';
+ const goals={lose:'Снижение веса',maintain:'Поддержание формы',gain:'Набор мышечной массы',recomp:'Улучшение состава тела'};
+ $('homeGoalLabel').textContent=(goals[p.goal]||'Твой персональный план')+' · маленькие шаги каждый день';
+ const target=Math.max(0,Number(p.calories)||0),consumed=Math.round(t.kcal),ratio=target?consumed/target:0;
+ $('homeCaloriesConsumed').textContent=consumed.toLocaleString('ru-RU');
+ $('homeCaloriesTarget').textContent=target.toLocaleString('ru-RU');
+ $('homeCaloriesLeft').textContent=target===0?'Установи ориентир КБЖУ в анкете':consumed<=target?`До ориентира ${Math.round(target-consumed).toLocaleString('ru-RU')} ккал`:`Выше ориентира на ${Math.round(consumed-target).toLocaleString('ru-RU')} ккал`;
+ const pct=Math.max(0,Math.round(ratio*100));
+ $('homeCaloriePercent').textContent=pct+'%';$('homeCalorieRing').style.setProperty('--progress',Math.min(100,pct)+'%');
+ $('homeCaloriesBar').style.width=Math.min(100,pct)+'%';
+ $('homeKcalStatus').textContent=target===0?'ЗАДАЙ ЦЕЛЬ':ratio>1?'ОРИЕНТИР ПРЕВЫШЕН':'ТВОЙ ОРИЕНТИР';
+ const metrics=[['Белки',Math.round(t.p),Number(p.protein)||0,'г'],['Жиры',Math.round(t.f),Number(p.fat)||0,'г'],['Углеводы',Math.round(t.c),Math.max(0,Math.round((target-(Number(p.protein)||0)*4-(Number(p.fat)||0)*9)/4)),'г']];
+ $('macroStats').innerHTML=metrics.map(([n,v,g,u])=>`<div class="stat"><div class="sub">${n}</div><div class="metric">${v}<small>из ${g} ${u}</small></div><div class="bar"><i style="width:${Math.min(100,g?v/g*100:0)}%"></i></div></div>`).join('');
+ const latest=[...state.weights].filter(x=>Number.isFinite(Number(x.weight))&&x.date).sort((a,b)=>a.date.localeCompare(b.date));
+ $('homeWeightSummary').textContent=latest.length?`${Number(latest[latest.length-1].weight).toLocaleString('ru-RU')} кг`:'Нет записи';
+ $('homeChartMessage').textContent=latest.length<2?'Для графика нужны как минимум два взвешивания.':'История последних измерений';
+ $('weightChart').hidden=latest.length<2;if(latest.length>=2)drawChart(latest);else $('weightChart').textContent='';
+ if(latest.length>1){const d=latest[latest.length-1].weight-latest[0].weight;$('weightDelta').textContent=(d>0?'+':'')+d.toFixed(1)+' кг за период';}
+ else $('weightDelta').textContent='Добавь несколько измерений';
+ const todaySteps=stepsFor(today()),stepTarget=Math.max(1,Number(p.steps)||8000);
+ $('homeStepSummary').textContent=todaySteps.toLocaleString('ru-RU')+' / '+stepTarget.toLocaleString('ru-RU');
+ $('homeStepProgress').style.width=Math.min(100,todaySteps/stepTarget*100)+'%';
+ const tr=trainingProfile();$('homeTrainingSummary').textContent=tr.place==='home'?'Тренировка дома':'Тренировка в зале';
+ $('homeTrainingDetail').textContent=(tr.days||3)+' занятия в неделю';
+ const checks=[['Питание',todayFoods().length>0],['Тренировка',!!state.completed[today()]],['Шаги',todaySteps>=stepTarget]];
  $('todayChecklist').innerHTML=checks.map(([n,v])=>`<div class="listitem row between"><span>${n}</span><span class="${v?'good':'muted'}">${v?'✓ отмечено':'не отмечено'}</span></div>`).join('');
- $('homeStepSummary').textContent=todaySteps.toLocaleString('ru-RU')+' / '+(Number(p.steps)||8000).toLocaleString('ru-RU')+' шагов';
- $('homeStepProgress').style.width=Math.min(100,todaySteps/Math.max(1,Number(p.steps)||8000)*100)+'%';
  $('dayBar').style.width=(checks.filter(x=>x[1]).length/checks.length*100)+'%';$('dayProgress').textContent=`${checks.filter(x=>x[1]).length} из ${checks.length} привычек отмечено`;
- const rate=latest.length>=8?(latest.slice(-7).reduce((a,x)=>a+x.weight,0)/Math.min(7,latest.length)-latest.slice(-14,-7).reduce((a,x)=>a+x.weight,0)/Math.max(1,Math.min(7,latest.slice(-14,-7).length))):null;
- let msg='Веди вес регулярно и оценивай среднее за 7 дней. Пока не меняй калории из-за одного взвешивания.';
- if(latest.length<7)msg='Собери хотя бы 7 утренних взвешиваний. Пока держи ориентир около '+p.calories+' ккал и '+p.protein+' г белка.';
- else if(t.kcal>p.calories+250)msg='Сегодня калории выше ориентира. Не компенсируй голоданием — просто вернись к обычному плану на следующем приёме пищи.';
- else if(t.kcal<p.calories-500)msg='Проверь, не недоедаешь ли ты сегодня. Стабильное питание помогает сохранить мышцы и восстановление.';
- $('recommendation').innerHTML=`<p>${esc(msg)}</p><p class="small muted">Коррекция калорий — только после 2–3 недель устойчивых данных о среднем весе, талии и соблюдении плана. Это ориентир, не медицинская рекомендация.</p>`;
+ let msg='Веди вес регулярно и оценивай среднее за неделю. Один день ещё не показывает тенденцию.';
+ if(latest.length<7)msg='Собери несколько взвешиваний в похожих условиях. Тогда будет проще увидеть настоящую тенденцию.';
+ else if(target&&t.kcal>target+250)msg='Сегодня калорий больше ориентира. Не нужно компенсировать это пропусками еды — вернись к привычному плану.';
+ else if(target&&t.kcal<target-500)msg='До дневного ориентира ещё далеко. Учитывай голод, самочувствие и то, что день может быть не завершён.';
+ $('recommendation').innerHTML=`<p>${esc(msg)}</p><p class="small muted">Калории — ориентир, а не точный расход энергии. Корректируй план по устойчивому прогрессу, а не по одному дню.</p>`;
 }
 function drawChart(data){let el=$('weightChart');if(!data.length){el.textContent='Добавь вес, чтобы увидеть график';return}let pts=data.slice(-14), vals=pts.map(x=>x.weight),min=Math.min(...vals)-.5,max=Math.max(...vals)+.5,range=max-min||1;let coords=vals.map((v,i)=>`${10+i*(280/Math.max(1,vals.length-1))},${150-(v-min)/range*120}`).join(' ');el.innerHTML=`<svg viewBox="0 0 300 170" role="img" aria-label="График веса"><line x1="8" y1="150" x2="292" y2="150" stroke="#284057"/><polyline points="${coords}" fill="none" stroke="#35d6a0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>${vals.map((v,i)=>`<circle cx="${10+i*(280/Math.max(1,vals.length-1))}" cy="${150-(v-min)/range*120}" r="3.5" fill="#35d6a0"/>`).join('')}<text x="8" y="13" fill="#91a6bc" font-size="10">${max.toFixed(1)} кг</text><text x="8" y="166" fill="#91a6bc" font-size="10">${esc(pts[0].date.slice(5))}</text><text x="255" y="166" fill="#91a6bc" font-size="10">${esc(pts[pts.length-1].date.slice(5))}</text></svg>`}
 function renderWeights(){ $('wDate').value ||= today();$('wWeight').value=state.profile.weight??'';$('wSteps').value=stepsFor(today())||'';
@@ -922,7 +949,7 @@ $('applyOnboarding').onclick=()=>{
 
 let currentFoodMode='search',currentTrainingMode='plan';
 function setActiveButtons(container,mode){if(!container)return;container.querySelectorAll('button[data-mode]').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode))}
-function applyFoodMode(mode){currentFoodMode=mode||'search';const tabs=$('foodModeTabs');setActiveButtons(tabs,currentFoodMode);const mapping={search:['foodPanel_search'],scan:['foodPanel_scan'],manual:['foodPanel_manual'],mine:['personalFoodBox']};['foodPanel_search','foodPanel_scan','foodPanel_manual','personalFoodBox'].forEach(id=>{const el=$(id);if(el)el.hidden=!(mapping[currentFoodMode]||[]).includes(id)});if(currentFoodMode==='mine'&&$('addPersonalFood'))$('addPersonalFood').scrollIntoView({block:'center',behavior:'smooth'})}
+function applyFoodMode(mode){if(currentFoodMode==='scan'&&mode!=='scan'&&typeof stopBarcodeCamera==='function')void stopBarcodeCamera();currentFoodMode=mode||'search';const tabs=$('foodModeTabs');setActiveButtons(tabs,currentFoodMode);const mapping={search:['foodPanel_search'],scan:['foodPanel_scan'],manual:['foodPanel_manual'],mine:['personalFoodBox']};['foodPanel_search','foodPanel_scan','foodPanel_manual','personalFoodBox'].forEach(id=>{const el=$(id);if(el)el.hidden=!(mapping[currentFoodMode]||[]).includes(id)});if(currentFoodMode==='mine'&&$('addPersonalFood'))$('addPersonalFood').scrollIntoView({block:'center',behavior:'smooth'})}
 function applyTrainingMode(mode){currentTrainingMode=mode||'plan';const tabs=$('trainingModeTabs');setActiveButtons(tabs,currentTrainingMode);document.querySelectorAll('[data-train-panel]').forEach(el=>el.hidden=el.dataset.trainPanel!==currentTrainingMode)}
 function initUiRefresh(){const foodTabs=$('foodModeTabs');if(foodTabs&&!foodTabs.dataset.ready){foodTabs.dataset.ready='1';foodTabs.querySelectorAll('button[data-mode]').forEach(b=>b.onclick=()=>applyFoodMode(b.dataset.mode));}
  const trainTabs=$('trainingModeTabs');if(trainTabs&&!trainTabs.dataset.ready){trainTabs.dataset.ready='1';trainTabs.querySelectorAll('button[data-mode]').forEach(b=>b.onclick=()=>applyTrainingMode(b.dataset.mode));}
@@ -1079,4 +1106,30 @@ const bootstrapConfig=getConfig();
 if(bootstrapConfig.url&&bootstrapConfig.key)setupCloud(bootstrapConfig);
 if('serviceWorker'in navigator&&location.protocol.startsWith('http'))navigator.serviceWorker.register('./sw.js').catch(()=>{});
 window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;$('installBtn').hidden=false});$('installBtn').onclick=async()=>{if(installPrompt){installPrompt.prompt();await installPrompt.userChoice;installPrompt=null;$('installBtn').hidden=true}};
+
+let activeSheet=null,previousFocus=null;
+function openSheet(id){
+ closeSheets();const el=$(id);if(!el)return;previousFocus=document.activeElement;activeSheet=el;
+ el.hidden=false;document.body.classList.add('sheet-open');const x=el.querySelector('.sheet-x');if(x)x.focus();
+}
+function closeSheets(){
+ if(activeSheet){activeSheet.hidden=true;activeSheet=null;document.body.classList.remove('sheet-open');}
+}
+function quickGo(target){
+ closeSheets();
+ if(target==='scan'){go('food');applyFoodMode('scan');return}
+ if(target==='manual'){go('food');applyFoodMode('manual');return}
+ if(target==='food'){go('food');applyFoodMode('search');return}
+ if(target==='training'){go('training');applyTrainingMode('session');return}
+ go(target);
+}
+document.querySelectorAll('[data-dock-route]').forEach(b=>b.onclick=()=>go(b.dataset.dockRoute));
+$('dockAdd').onclick=()=>openSheet('quickSheet');$('dockMore').onclick=()=>openSheet('moreSheet');
+$('topProfile').onclick=()=>go('settings');$('homeAddFood').onclick=()=>quickGo('food');
+document.querySelectorAll('[data-home-go]').forEach(b=>b.onclick=()=>go(b.dataset.homeGo));
+document.querySelectorAll('[data-quick]').forEach(b=>b.onclick=()=>quickGo(b.dataset.quick));
+document.querySelectorAll('[data-route]').forEach(b=>b.onclick=()=>go(b.dataset.route));
+document.querySelectorAll('[data-close-sheet]').forEach(b=>b.onclick=closeSheets);
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&activeSheet){closeSheets();if(previousFocus?.focus)previousFocus.focus();}});
+
 $('wDate').value=today();renderAll();
