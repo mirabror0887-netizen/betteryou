@@ -5,7 +5,7 @@ const defaultState={
  profile:{age:null,height:null,weight:null,sex:'',calories:2000,protein:100,fat:65,steps:8000},
  weights:[],
  dailySteps:[],weekPlan:[],
- foods:[],customFoods:[],barcodeFoods:[],personalFoods:[],favoriteFoods:[],shopping:[],lifts:[],completed:{},
+ foods:[],customFoods:[],barcodeFoods:[],personalFoods:[],favoriteFoods:[],shopping:[],lifts:[],trainingSessions:[],completed:{},
  workouts:[
  {name:'День 1 · Грудь + руки',day:'Пн',items:[['Жим гантелей лёжа','Грудь',3,'8–12'],['Жим гантелей на наклонной скамье','Грудь',3,'8–12'],['Сведение рук в кроссовере','Грудь',2,'12–15'],['Сгибание рук с гантелями','Бицепс',3,'8–12'],['Сгибание на скамье Скотта или на блоке','Бицепс',2,'10–15'],['Разгибание рук на блоке с канатом','Трицепс',3,'10–15'],['Разгибание рук над головой на блоке','Трицепс',2,'10–15']]},
  {name:'День 2 · Спина + плечи',day:'Ср',items:[['Тяга верхнего блока','Спина',3,'8–12'],['Тяга с упором грудью','Спина',3,'8–12'],['Пуловер на верхнем блоке','Спина',2,'12–15'],['Жим гантелей сидя','Плечи',3,'8–12'],['Подъёмы гантелей в стороны','Плечи',3,'12–20'],['Обратная бабочка','Задняя дельта',3,'12–15'],['Face pull','Задняя дельта',2,'12–20']]},
@@ -25,7 +25,7 @@ const CONFIG_KEY='betteryou-supabase-config-v2';
 const userKey=id=>`betteryou-user-${id}`;
 const pendingKey=id=>`betteryou-pending-${id}`;
 const versionKey=id=>`betteryou-version-${id}`;
-const dataFields=['profile','weights','dailySteps','weekPlan','foods','customFoods','barcodeFoods','personalFoods','favoriteFoods','shopping','lifts','completed','workouts','recipes'];
+const dataFields=['profile','weights','dailySteps','weekPlan','foods','customFoods','barcodeFoods','personalFoods','favoriteFoods','shopping','lifts','trainingSessions','completed','workouts','recipes'];
 function cleanData(d){
  const result=structuredClone(defaultState);
  if(!d||typeof d!=='object'||Array.isArray(d))return result;
@@ -120,50 +120,197 @@ function renderWeights(){ $('wDate').value ||= today();$('wWeight').value=state.
  const arr=[...state.weights].sort((a,b)=>b.date.localeCompare(a.date));$('weightHistory').innerHTML=arr.length?arr.map((x,i)=>`<div class="listitem row between"><div><b>${esc(x.date)}</b><div class="sub">${x.waist?`Талия ${x.waist} см · `:''}${x.steps?x.steps+' шагов':''}</div></div><div class="row"><b>${x.weight} кг</b><button class="danger" data-delweight="${i}">×</button></div></div>`).join(''):'<p class="muted">Записей пока нет.</p>';
  $('weightHistory').querySelectorAll('[data-delweight]').forEach(b=>b.onclick=()=>{let x=arr[+b.dataset.delweight];state.weights=state.weights.filter(w=>w!==x);save()});
 }
-// BetterYou 2.6: training place and muscle-building starter. Old workout records remain untouched.
-const HOME_WORKOUTS=[
- {name:'Дом · Верх тела',day:'Пн',items:[['Отжимания от опоры','Грудь',3,'6–12'],['Тяга резинки к поясу','Спина',3,'10–15'],['Жим гантелей стоя','Плечи',2,'8–12'],['Сгибание рук с гантелями','Бицепс',2,'10–15']]},
- {name:'Дом · Низ тела',day:'Ср',items:[['Приседание до стула','Ноги',3,'8–12'],['Ягодичный мост','Ягодицы',3,'10–15'],['Румынская тяга с гантелями','Задняя поверхность бедра',2,'8–12'],['Подъёмы на носки стоя','Икры',3,'12–20']]},
- {name:'Дом · Всё тело',day:'Пт',items:[['Отжимания от опоры','Грудь',2,'6–12'],['Тяга резинки к поясу','Спина',3,'10–15'],['Приседание до стула','Ноги',2,'8–12'],['Планка','Пресс',2,'20–40 сек']]}
-];
-const EXERCISE_TIPS={
- 'Жим гантелей лёжа':'Лопатки стабилизированы, стопы на полу, опускай гантели плавно без резких движений.',
- 'Жим гантелей на наклонной скамье':'Контролируй опускание и сохраняй запястья над предплечьями.',
- 'Сведение рук в кроссовере':'Сохраняй небольшой сгиб локтей и не тяни вес рывком.',
- 'Тяга верхнего блока':'Опускай рукоять к верхней части груди, не отклоняйся резко назад.',
- 'Тяга с упором грудью':'Сохраняй грудь на опоре и веди локти назад без рывка.',
- 'Жим гантелей сидя':'Держи корпус устойчивым, не переразгибай поясницу.',
- 'Подъёмы гантелей в стороны':'Используй лёгкий вес и контролируй подъём, без раскачивания.',
- 'Румынская тяга с гантелями':'Отводи таз назад с нейтральной спиной, двигайся в комфортной амплитуде.',
- 'Планка':'Удерживай корпус устойчивым, не проваливай поясницу.',
- 'Отжимания от опоры':'Начни с высокой устойчивой опоры, держи корпус прямым.',
- 'Тяга резинки к поясу':'Зафиксируй резинку надёжно, своди лопатки без рывка.',
- 'Приседание до стула':'Опускайся на устойчивый стул в комфортной амплитуде без боли.',
- 'Ягодичный мост':'Поднимай таз за счёт ягодиц, без сильного прогиба поясницы.',
- 'Жим гантелей стоя':'Стой устойчиво, избегай прогиба поясницы.',
- 'Подъёмы на носки стоя':'Поднимай и опускай пятки плавно, держись за опору.'
+// BetterYou 2.8 — training studio: per-user profile, home/gym generator, exercise guides, sets, sessions, timer and trends.
+// Educational training templates; not a diagnosis, medical treatment or a substitute for an individual coach.
+const TRAINING_LIBRARY=[
+// ID | visible name | muscle | place | equipment | cues | typical mistake | movement caution tags
+ ['chest_machine','Жим в грудном тренажёре','Грудь','gym','machine','Настрой сиденье так, чтобы рукояти были у середины груди|Стабилизируй лопатки и выжимай без рывка|Медленно возвращай вес','Не поднимай плечи к ушам','shoulder'],
+ ['db_bench','Жим гантелей лёжа','Грудь','gym','dumbbell','Упрись стопами в пол и собери лопатки|Держи запястья над предплечьями|Опускай вес плавно до комфортной глубины','Не отскакивай от нижней точки','shoulder'],
+ ['db_incline','Жим гантелей на наклонной','Грудь','gym','dumbbell','Настрой небольшой наклон скамьи|Опускай локти подконтрольно|Выжимай гантели без столкновения','Не выгибай чрезмерно поясницу','shoulder'],
+ ['cable_fly','Сведение рук в кроссовере','Грудь','gym','cable','Выставь умеренный вес|Сохраняй лёгкий сгиб локтя|Своди руки перед грудью, не бросая вес','Не тяни корпусом','shoulder'],
+ ['lat_pulldown','Тяга верхнего блока','Спина','gym','cable','Возьми рукоять удобным хватом|Опускай к верхней части груди|Подконтрольно выпрямляй руки','Не тяни за шею','shoulder'],
+ ['cable_row','Горизонтальная тяга блока','Спина','gym','cable','Сядь устойчиво и выпрями спину|Тяни локти назад к поясу|Возвращай рукоять без рывка','Не раскачивай корпус','back'],
+ ['supported_row','Тяга с упором грудью','Спина','gym','machine','Прижми грудь к опоре|Тяни локти назад вдоль тела|Опускай вес медленно','Не отрывай грудь от опоры','shoulder'],
+ ['assisted_pullup','Подтягивания с поддержкой','Спина','gym','machine','Настрой поддержку под свой уровень|Начинай со стабильных плеч|Поднимайся без рывка и плавно опускайся','Не размахивай ногами','shoulder'],
+ ['seated_press','Жим гантелей сидя','Плечи','gym','dumbbell','Сядь устойчиво, сохрани нейтральную спину|Выжимай вверх по комфортной траектории|Опускай плавно','Не переразгибай поясницу','shoulder'],
+ ['lateral_raise','Подъём гантелей в стороны','Плечи','gym','dumbbell','Подбери небольшой вес|Поднимай руки без раскачивания|Контролируй опускание','Не используй инерцию','shoulder'],
+ ['face_pull','Тяга к лицу с канатом','Плечи','gym','cable','Поставь блок примерно на уровне лица|Тяни канат к вискам, разводя концы|Не запрокидывай корпус','Не дёргай слишком тяжёлый вес','shoulder'],
+ ['leg_press','Жим ногами в тренажёре','Ноги','gym','machine','Сохраняй таз и поясницу на спинке|Опускай платформу в комфортной амплитуде|Не выпрямляй колени резко','Не отрывай таз','knee'],
+ ['goblet_squat','Присед с гантелью у груди','Ноги','gym','dumbbell','Держи гантель близко к груди|Опускайся в комфортную глубину|Поднимайся контролируемо','Не проваливай колени внутрь','knee'],
+ ['db_rdl','Румынская тяга с гантелями','Задняя цепь','both','dumbbell','Отведи таз назад, немного согни колени|Веди гантели близко к ногам|Поднимайся, напрягая ягодицы','Не округляй спину','back'],
+ ['leg_curl','Сгибание ног в тренажёре','Ноги','gym','machine','Подстрой ось тренажёра под колено|Сгибай ноги плавно|Не бросай вес в исходное положение','Не дёргай нагрузку','knee'],
+ ['leg_extension','Разгибание ног сидя','Ноги','gym','machine','Настрой сиденье под длину бедра|Выпрямляй колени без рывков|Опускай груз подконтрольно','Не работай через боль в колене','knee'],
+ ['hip_thrust','Ягодичный мост в тренажёре','Ягодицы','gym','machine','Настрой опору и ремень|Подними таз усилием ягодиц|Сохраняй рёбра над тазом','Не переразгибай поясницу','back'],
+ ['standing_calf','Подъёмы на носки','Икры','both','body','Встань устойчиво и держись за опору|Поднимай пятки плавно|Опускай с контролем','Не пружинь корпусом',''],
+ ['cable_crunch','Скручивания на блоке','Пресс','gym','cable','Зафиксируй таз|Скругляй корпус за счёт мышц живота|Возвращайся медленно','Не тяните верёвку только руками','back'],
+ ['db_curl','Сгибание рук с гантелями','Руки','both','dumbbell','Держи локти близко к туловищу|Поднимай гантели без рывка|Медленно опускай','Не раскачивай спину',''],
+ ['cable_triceps','Разгибание рук на блоке','Руки','gym','cable','Локти у боков|Выпрямляй предплечья вниз|Возвращай вес плавно','Не двигай плечами',''],
+ ['plank','Планка','Пресс','both','body','Положи предплечья под плечи|Выровняй корпус и мягко напряги пресс|Дыши спокойно','Не проваливай поясницу','back'],
+ ['dead_bug','Жук на спине (dead bug)','Пресс','both','body','Ляг на спину, подними руки и ноги|Поочерёдно выпрямляй противоположные конечности|Не отрывай поясницу рывком','Не задерживай дыхание',''],
+ ['bird_dog','Птица-собака (bird dog)','Пресс','both','body','Встань на четвереньки|Вытяни противоположные руку и ногу|Сохраняй таз ровным','Не переразгибай шею',''],
+ ['incline_pushup','Отжимания от высокой опоры','Грудь','home','body','Найди устойчивую неподвижную опору|Держи тело одной линией|Опускай грудь к опоре и отжимайся','Не используй скользкую опору','shoulder'],
+ ['floor_pushup','Отжимания от пола','Грудь','home','body','Ладони примерно под плечами|Опускай тело без прогиба в пояснице|Поднимайся ровно','Не разводи локти слишком широко','shoulder'],
+ ['wall_pushup','Отжимания от стены','Грудь','home','body','Поставь ладони на стену чуть шире плеч|Согни руки и приблизься к стене|Оттолкнись обратно','Не прогибай спину','shoulder'],
+ ['db_floor_press','Жим гантелей лёжа на полу','Грудь','home','dumbbell','Ляг на коврик, согни колени|Медленно опускай локти к полу|Выжимай гантели вверх','Не бей локтями о пол','shoulder'],
+ ['band_press','Жим резинки от груди','Грудь','home','band','Закрепи резинку безопасно за спиной|Выжимай руки вперёд|Возвращай медленно','Не используй ненадёжное крепление','shoulder'],
+ ['band_row','Тяга резинки к поясу','Спина','home','band','Зафиксируй резинку на устойчивой опоре|Тяни локти к поясу|Плавно отпускай натяжение','Не крепи ленту к ненадёжным предметам','back'],
+ ['db_row','Тяга гантели одной рукой','Спина','home','dumbbell','Упрись ладонью на устойчивую опору|Веди локоть к тазу|Опускай гантель медленно','Не скручивай корпус','back'],
+ ['prone_w','Сведение лопаток лёжа','Спина','home','body','Ляг лицом вниз на коврик|Согни руки буквой W|Своди лопатки плавно без прогиба','Не запрокидывай шею','back'],
+ ['band_pullapart','Разведение резинки перед грудью','Спина','home','band','Держи резинку на уровне груди|Разводи руки, сохраняя спокойные плечи|Возвращай с контролем','Не отклоняй корпус назад','shoulder'],
+ ['db_shoulder','Жим гантелей стоя','Плечи','home','dumbbell','Поставь стопы устойчиво|Выжимай гантели над головой по комфортной дуге|Сохраняй рёбра над тазом','Не запрокидывайся назад','shoulder'],
+ ['band_lateral','Подъём рук с резинкой','Плечи','home','band','Наступи на середину резинки устойчиво|Разводи руки с небольшим сгибом|Опускай медленно','Не рывком','shoulder'],
+ ['wall_slide','Скольжения рук по стене','Плечи','home','body','Обопрись спиной на стену|Медленно поднимай руки вверх|Сохраняй комфортную амплитуду','Не продавливай болезненное движение','shoulder'],
+ ['sit_to_stand','Вставание со стула','Ноги','home','body','Сядь на устойчивый стул|Наклони корпус слегка вперёд и встань|Сядь медленно','Не падай на сиденье','knee'],
+ ['chair_squat','Приседание до стула','Ноги','home','body','Встань перед устойчивым стулом|Отведи таз назад к сиденью|Вернись наверх без рывка','Не опускайся через боль','knee'],
+ ['step_up','Подъём на низкую ступень','Ноги','home','body','Найди невысокую устойчивую ступень|Встань на неё, удерживая равновесие|Сойди медленно','Не используй шаткую ступень','knee'],
+ ['split_squat','Выпад на месте с опорой','Ноги','home','body','Возьмись за устойчивую опору|Согни ноги в комфортной амплитуде|Поднимись плавно','Не делай глубокие выпады при боли','knee'],
+ ['glute_bridge','Ягодичный мост на полу','Ягодицы','home','body','Ляг, поставь стопы под колени|Подними таз, напрягая ягодицы|Опусти медленно','Не переразгибай поясницу','back'],
+ ['single_glute','Ягодичный мост с паузой','Ягодицы','home','body','Ляг на спину, согни колени|Поднимай таз и задержись на 2 секунды|Медленно опусти','Не выгибай поясницу','back'],
+ ['db_calf','Подъёмы на носки с гантелями','Икры','home','dumbbell','Устойчиво стой у опоры|Поднимись на носки|Опустись медленно','Не теряй равновесие',''],
+ ['marching','Марш на месте','Кардио','home','body','Выпрямись, смотри вперёд|Шагай в комфортном ритме|Сохраняй ровное дыхание','Не ускоряйся до дискомфорта','knee']
+].map(([id,name,muscle,place,gear,cues,mistake,avoid])=>({id,name,muscle,place,gear,cues:cues.split('|'),mistake,avoid:avoid?avoid.split(','):[]}));
+const EX_BY_ID=Object.fromEntries(TRAINING_LIBRARY.map(x=>[x.id,x]));
+const TRAIN_TEMPLATES={
+ gym:{
+  fullA:[['chest_machine','db_bench'],['lat_pulldown','supported_row'],['leg_press','leg_curl'],['db_rdl','hip_thrust'],['dead_bug','plank'],['db_curl','cable_triceps']],
+  fullB:[['db_incline','chest_machine'],['cable_row','supported_row'],['goblet_squat','leg_press'],['hip_thrust','leg_curl'],['cable_crunch','dead_bug'],['face_pull','lateral_raise']],
+  fullC:[['seated_press','lateral_raise'],['supported_row','lat_pulldown'],['leg_curl','leg_press'],['leg_extension','goblet_squat'],['standing_calf'],['plank','dead_bug']],
+  upperA:[['chest_machine','db_bench'],['lat_pulldown','supported_row'],['db_incline','cable_fly'],['cable_row','supported_row'],['lateral_raise','face_pull'],['cable_triceps','db_curl'],['db_curl','cable_triceps']],
+  lowerA:[['leg_press','goblet_squat'],['db_rdl','hip_thrust'],['leg_curl'],['standing_calf'],['cable_crunch','dead_bug'],['leg_extension']],
+  upperB:[['seated_press','lateral_raise'],['supported_row','cable_row'],['cable_fly','chest_machine'],['assisted_pullup','lat_pulldown'],['db_curl','cable_triceps'],['face_pull','lateral_raise']],
+  lowerB:[['goblet_squat','leg_press'],['hip_thrust','db_rdl'],['leg_extension','leg_curl'],['standing_calf'],['dead_bug','plank'],['leg_curl']],
+ },
+ home:{
+  fullA:[['incline_pushup','floor_pushup','wall_pushup','band_press'],['band_row','db_row','prone_w'],['chair_squat','sit_to_stand'],['glute_bridge','single_glute'],['dead_bug','plank'],['band_lateral','wall_slide']],
+  fullB:[['db_floor_press','incline_pushup','wall_pushup'],['db_row','band_row','prone_w'],['db_rdl','glute_bridge'],['step_up','sit_to_stand'],['plank','dead_bug'],['db_curl','wall_slide']],
+  fullC:[['floor_pushup','incline_pushup','wall_pushup'],['band_pullapart','db_row','prone_w'],['sit_to_stand','chair_squat'],['single_glute','glute_bridge'],['standing_calf'],['bird_dog','dead_bug']],
+  upperA:[['incline_pushup','wall_pushup','db_floor_press'],['band_row','db_row','prone_w'],['db_floor_press','band_press','floor_pushup'],['band_pullapart','prone_w'],['wall_slide','db_shoulder'],['db_curl','bird_dog']],
+  lowerA:[['chair_squat','sit_to_stand'],['db_rdl','glute_bridge'],['glute_bridge','single_glute'],['standing_calf','db_calf'],['dead_bug','bird_dog'],['step_up','marching']],
+  upperB:[['db_shoulder','band_lateral','wall_slide'],['db_row','band_row','prone_w'],['floor_pushup','incline_pushup','wall_pushup'],['band_pullapart','prone_w'],['db_curl','bird_dog'],['plank','dead_bug']],
+  lowerB:[['step_up','chair_squat','sit_to_stand'],['single_glute','glute_bridge'],['db_rdl','glute_bridge'],['standing_calf'],['bird_dog','dead_bug'],['marching','step_up']],
+ }
 };
-function activeWorkouts(){
- const base=state.profile.trainingPlace==='home'?HOME_WORKOUTS:state.workouts;
- if(state.profile.trainingGoal!=='general')return base;
- return base.map(w=>({...w,name:w.name+' · Общая форма',items:w.items.map(it=>[it[0],it[1],Math.max(2,(Number(it[2])||2)-1),it[3]])}));
+const TRAIN_DAY_SETS={2:['fullA','fullB'],3:['fullA','fullB','fullC'],4:['upperA','lowerA','upperB','lowerB'],5:['upperA','lowerA','fullC','upperB','lowerB']};
+const TRAIN_DAY_NAMES={fullA:'Всё тело A',fullB:'Всё тело B',fullC:'Всё тело C',upperA:'Верх тела A',upperB:'Верх тела B',lowerA:'Низ тела A',lowerB:'Низ тела B'};
+const TRAIN_DEFAULT={place:'gym',goal:'muscle',experience:'beginner',days:3,duration:45,equipment:'none',exclude:[],updatedAt:''};
+function trainingProfile(){const p=state.profile.trainingV28||{};return {...TRAIN_DEFAULT,...p,exclude:Array.isArray(p.exclude)?p.exclude:[]}}
+function canUseExercise(ex,profile){if(!ex)return false;if(ex.place!=='both'&&ex.place!==profile.place)return false;
+ if(profile.place==='home'&&ex.gear!=='body'){
+  if(ex.gear==='band'&&!['bands','both'].includes(profile.equipment))return false;
+  if(ex.gear==='dumbbell'&&!['dumbbells','both'].includes(profile.equipment))return false;
+  if(!['band','dumbbell'].includes(ex.gear))return false;
+ }
+ return !ex.avoid.some(tag=>profile.exclude.includes(tag));}
+function chooseExercise(candidates,p,seen){for(const id of candidates){const ex=EX_BY_ID[id];if(canUseExercise(ex,p)&&!seen.has(id))return ex;}
+ const first=EX_BY_ID[candidates[0]];return TRAINING_LIBRARY.find(ex=>ex.muscle===first?.muscle&&canUseExercise(ex,p)&&!seen.has(ex.id))||null;}
+function trainingSetsFor(p,ex){if(p.goal==='general'||p.goal==='fatloss')return p.experience==='beginner'?2:3;return p.experience==='beginner'?2:p.experience==='advanced'?4:3;}
+function trainingRangeFor(p,ex){if(p.goal==='strength')return ex.gear==='body'?'8–12':'5–8';if(p.goal==='muscle')return ex.muscle==='Пресс'?'20–40 сек / 8–15':'8–12';return ex.muscle==='Пресс'?'20–40 сек / 8–15':'10–15';}
+function trainingRestFor(p,ex){return p.goal==='strength'?150:p.goal==='muscle'?120:75;}
+function trainingProgram(p=trainingProfile()){
+ const dayKeys=TRAIN_DAY_SETS[Number(p.days)]||TRAIN_DAY_SETS[3];
+ return dayKeys.map((key,index)=>{
+  const seen=new Set(),limit=Number(p.duration)<=30?4:Number(p.duration)>=70?7:Number(p.duration)>=55?6:5;
+  const slots=(TRAIN_TEMPLATES[p.place]||TRAIN_TEMPLATES.gym)[key]||[];
+  const items=[];
+  for(const opts of slots){if(items.length>=limit)break;const e=chooseExercise(opts,p,seen);if(!e)continue;seen.add(e.id);items.push({id:e.id,sets:trainingSetsFor(p,e),reps:trainingRangeFor(p,e),rest:trainingRestFor(p,e)});}
+  return {key,index,name:TRAIN_DAY_NAMES[key],items};
+ });
 }
-function workoutVideoSearch(name){return 'https://www.youtube.com/results?search_query='+encodeURIComponent(name+' техника упражнения тренер')}
-function updateTrainingChoiceUI(){
- const mode=state.profile.trainingPlace==='home'?'home':'gym';
- $('trainingPlace').value=mode;
- $('trainingGoal').value=state.profile.trainingGoal==='general'?'general':'muscle';
- $('trainingModeSummary').textContent=(mode==='gym'?'Программа для зала':'Программа для дома')+(state.profile.trainingGoal==='general'?' · облегчённый объём':' · набор мышечной массы');
+let trainingDayIndex=0,trainingTimerUntil=0,trainingTimerLeft=0,trainingTimerHandle=null;
+function trainingSessionDraft(){const d=state.profile.trainingDraft;return d&&typeof d==='object'&&d.id?d:null}
+function trainingCurrentDay(){const days=trainingProgram();trainingDayIndex=Math.min(trainingDayIndex,days.length-1);return days[Math.max(0,trainingDayIndex)];}
+function trainVideoSearch(ex){return 'https://www.youtube.com/results?search_query='+encodeURIComponent(ex.name+' правильная техника выполнения фитнес упражнение');}
+function trainingRoutineNote(p){return p.goal==='muscle'?'Рост мышц: старайся оставлять 1–3 повтора в запасе, увеличивай нагрузку постепенно.':p.goal==='strength'?'Сила: осваивай технику, отдыхай дольше между тяжёлыми подходами.':p.goal==='fatloss'?'Снижение веса: силовые помогают сохранять мышцы; основное изменение веса зависит от питания и активности.':'Общая форма: ориентируйся на комфортную нагрузку и регулярность.';}
+function renderTrainingSetup(){const p=trainingProfile();
+ for(const [id,key] of [['tPlace','place'],['tGoal','goal'],['tExperience','experience'],['tDays','days'],['tDuration','duration'],['tEquipment','equipment']])$(id).value=String(p[key]);
+ for(const tag of ['knee','back','shoulder'])$('tAvoid_'+tag).checked=p.exclude.includes(tag);
+ $('tEquipmentRow').hidden=p.place!=='home';
+ const weeks=state.trainingSessions.filter(x=>{const d=String(x.date||'');return d>=dayOffset(-6)&&d<=today()});
+ const recent=state.lifts.filter(x=>String(x.date||'')>=dayOffset(-6));
+ const load=recent.reduce((s,x)=>s+(Number(x.weight)||0)*(Number(x.reps)||0),0);
+ $('trainingDashboard').innerHTML=`<div class="stats"><div class="stat"><div class="sub">Занятий за 7 дней</div><div class="metric">${weeks.length}<small> / ${p.days}</small></div></div><div class="stat"><div class="sub">Подходов за 7 дней</div><div class="metric">${recent.length}</div></div><div class="stat"><div class="sub">Общий тоннаж</div><div class="metric">${Math.round(load).toLocaleString('ru-RU')} <small>кг</small></div></div><div class="stat"><div class="sub">Программа</div><div class="metric">${p.place==='gym'?'Зал':'Дом'}<small> · ${p.days} дн.</small></div></div></div>`;
+ $('trainingPlanSummary').textContent=`${p.days} тренировок в неделю · примерно ${p.duration} мин · ${p.experience==='beginner'?'новичок':p.experience==='intermediate'?'средний уровень':'опытный'}. ${trainingRoutineNote(p)}`;
 }
-$('trainingPlace').onchange=()=>{state.profile.trainingPlace=$('trainingPlace').value;activeWorkout=0;save()};
-$('trainingGoal').onchange=()=>{state.profile.trainingGoal=$('trainingGoal').value;save()};
+function renderTraining(){renderTrainingSetup();const days=trainingProgram();const current=trainingCurrentDay();const draft=trainingSessionDraft();
+ $('workoutPicker').innerHTML=days.map((d,i)=>`<button type="button" class="${trainingDayIndex===i?'':'secondary'}" data-tday="${i}">${i+1}. ${esc(d.name)} <span class="small">· ${d.items.length} упр.</span></button>`).join('');
+ $('workoutPicker').querySelectorAll('[data-tday]').forEach(b=>b.onclick=()=>{trainingDayIndex=Number(b.dataset.tday);renderTraining()});
+ $('trainingStart').disabled=!!draft;
+ $('trainingFinish').disabled=!draft;
+ $('trainingCancel').hidden=!draft;
+ $('trainingLiveStatus').textContent=draft?`Идёт тренировка «${esc(draft.name)}» · начата ${new Date(draft.startedAt).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'})}`:'Нажми «Начать тренировку» для отдельного занятия, либо записывай подходы без запуска.';
+ const oldCount=state.lifts.filter(l=>l.sessionId===draft?.id).length;
+ $('trainingSetCount').textContent=draft?`Записано подходов в этом занятии: ${oldCount}`:'';
+ const d=current;const changes=state.profile.trainingSwaps||{};
+ $('workoutDetails').innerHTML=`<h2>${esc(d.name)}</h2><p class="small muted">Разминка 5–10 минут и 1–2 лёгких разминочных подхода перед основными движениями. Отдыхай между тренировками тех же мышц. При боли останови движение.</p>`+
+ d.items.map((it,i)=>{const base=EX_BY_ID[it.id],choiceId=changes[d.key+':'+it.id]||it.id;
+  const selected=canUseExercise(EX_BY_ID[choiceId],trainingProfile())?EX_BY_ID[choiceId]:base;
+  const alts=TRAINING_LIBRARY.filter(x=>x.muscle===base.muscle&&x.id!==base.id&&canUseExercise(x,trainingProfile())).slice(0,10);
+  const logged=state.lifts.filter(l=>l.sessionId===draft?.id&&draft&&l.exerciseId===selected.id).length;
+  return `<article class="train-exercise"><div class="row between" style="align-items:start"><div><span class="pill">${esc(selected.muscle)}</span><h3 style="margin:8px 0 4px">${i+1}. ${esc(selected.name)}</h3><p class="sub">${it.sets} подхода × ${esc(it.reps)} · отдых ${it.rest} сек${draft?' · выполнено '+logged:''}</p></div><button type="button" class="secondary train-small" data-guide="${esc(selected.id)}">▶ Техника</button></div><p class="small muted">${esc(selected.cues[0])}</p><details><summary class="small">Заменить упражнение</summary><select class="train-swap" data-original="${esc(it.id)}" data-day="${esc(d.key)}"><option value="${esc(it.id)}" ${selected.id===it.id?'selected':''}>${esc(base.name)}</option>${alts.map(a=>`<option value="${esc(a.id)}" ${selected.id===a.id?'selected':''}>${esc(a.name)}</option>`).join('')}</select></details><form class="train-set-form" data-exercise="${esc(selected.id)}" data-name="${esc(selected.name)}"><label>Вес, кг (0 = без отягощения)<input name="weight" type="number" min="0" max="1000" step="0.5" value="0" required></label><label>Повторы / секунды<input name="reps" type="number" min="1" max="300" step="1" placeholder="10" required></label><label>Повторов в запасе<select name="rir"><option value="3">3+</option><option value="2" selected>2</option><option value="1">1</option><option value="0">0</option></select></label><button type="submit" class="secondary">+ Записать подход</button></form></article>`;}).join('');
+ document.querySelectorAll('[data-guide]').forEach(b=>b.onclick=()=>openTrainingGuide(b.dataset.guide));
+ document.querySelectorAll('.train-swap').forEach(el=>el.onchange=()=>{state.profile.trainingSwaps={...(state.profile.trainingSwaps||{}),[el.dataset.day+':'+el.dataset.original]:el.value};save()});
+ document.querySelectorAll('.train-set-form').forEach(form=>form.onsubmit=e=>{
+  e.preventDefault();const input=new FormData(form);const weight=Number(input.get('weight')),reps=Number(input.get('reps')),rir=Number(input.get('rir'));
+  if(!Number.isFinite(weight)||weight<0||weight>1000||!Number.isInteger(reps)||reps<1||reps>300)return alert('Проверь вес и повторы.');
+  const ex=EX_BY_ID[form.dataset.exercise],live=trainingSessionDraft();
+  state.lifts.unshift({id:uid(),date:today(),timestamp:new Date().toISOString(),workout:live?.name||d.name,sessionId:live?.id||null,exercise:ex.name,exerciseId:ex.id,weight,reps,rir,set:state.lifts.filter(l=>l.date===today()&&l.exerciseId===ex.id&&l.sessionId===(live?.id||null)).length+1});
+  save();startTrainingRest(trainingRestFor(trainingProfile(),ex));
+ });
+ const entries=state.lifts.slice().sort((a,b)=>String(b.timestamp||b.date).localeCompare(String(a.timestamp||a.date))).slice(0,25);
+ $('liftHistory').innerHTML=entries.length?entries.map(l=>`<div class="listitem row between"><div><b>${esc(l.exercise)}</b><div class="sub">${esc(l.date)} · ${esc(l.workout||'Тренировка')} · подход ${esc(l.set||1)}</div></div><div class="row"><b>${Number(l.weight)||0} кг × ${Number(l.reps)||0}</b><button type="button" class="danger train-small" data-remove-set="${esc(l.id||'')}" ${l.id?'':'hidden'} aria-label="Удалить подход">×</button></div></div>`).join(''):'<p class="muted">Запиши первый подход, чтобы начать журнал.</p>';
+ document.querySelectorAll('[data-remove-set]').forEach(b=>b.onclick=()=>{if(!confirm('Удалить подход?'))return;state.lifts=state.lifts.filter(x=>x.id!==b.dataset.removeSet);save()});
+ $('trainingSessionHistory').innerHTML=state.trainingSessions.length?state.trainingSessions.slice().sort((a,b)=>String(b.finishedAt||b.date).localeCompare(String(a.finishedAt||a.date))).slice(0,16).map(x=>`<div class="listitem row between"><div><b>${esc(x.name)}</b><div class="sub">${esc(x.date)} · ${Number(x.sets)||0} подходов · ${Number(x.duration)||0} мин</div></div><button class="danger train-small" type="button" data-delete-session="${esc(x.id)}">×</button></div>`).join(''):'<p class="muted">Завершённые тренировки появятся здесь.</p>';
+ document.querySelectorAll('[data-delete-session]').forEach(b=>b.onclick=()=>{if(!confirm('Удалить отметку о завершении? Записанные подходы останутся.'))return;state.trainingSessions=state.trainingSessions.filter(x=>x.id!==b.dataset.deleteSession);save()});
+ renderTrainingProgress();renderTrainingLibrary();renderTrainingTimer();
+}
+function startTrainingRest(seconds){trainingTimerLeft=seconds;trainingTimerUntil=Date.now()+seconds*1000;renderTrainingTimer();}
+function renderTrainingTimer(){if(!$('trainingTimer'))return;
+ let seconds=trainingTimerUntil?Math.max(0,Math.ceil((trainingTimerUntil-Date.now())/1000)):trainingTimerLeft;
+ if(trainingTimerUntil&&!seconds){trainingTimerUntil=0;trainingTimerLeft=0;}
+ $('trainingTimer').textContent=`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`;
+ $('trainingTimerState').textContent=seconds?'Таймер отдыха':'Готов к следующему подходу';
+}
+for(const secs of [60,90,120,180])$('trainingRest'+secs).onclick=()=>startTrainingRest(secs);
+$('trainingTimerPause').onclick=()=>{if(trainingTimerUntil){trainingTimerLeft=Math.max(0,Math.ceil((trainingTimerUntil-Date.now())/1000));trainingTimerUntil=0}else if(trainingTimerLeft){trainingTimerUntil=Date.now()+trainingTimerLeft*1000}renderTrainingTimer()};
+$('trainingTimerReset').onclick=()=>{trainingTimerUntil=0;trainingTimerLeft=0;renderTrainingTimer()};
+trainingTimerHandle=setInterval(renderTrainingTimer,1000);
+$('trainingStart').onclick=()=>{if(trainingSessionDraft())return alert('Заверши или отмени текущую тренировку.');const d=trainingCurrentDay();state.profile.trainingDraft={id:uid(),date:today(),startedAt:new Date().toISOString(),key:d.key,name:d.name};save()};
+$('trainingFinish').onclick=()=>{const d=trainingSessionDraft();if(!d)return;const sets=state.lifts.filter(x=>x.sessionId===d.id);if(!sets.length&&!confirm('Подходы не записаны. Всё равно завершить тренировку?'))return;
+ const duration=Math.max(1,Math.round((Date.now()-new Date(d.startedAt).getTime())/60000));
+ state.trainingSessions.unshift({id:d.id,date:today(),name:d.name,sets:sets.length,duration,finishedAt:new Date().toISOString()});delete state.profile.trainingDraft;save()};
+$('trainingCancel').onclick=()=>{if(!confirm('Отменить текущее занятие? Уже записанные подходы останутся в журнале.'))return;delete state.profile.trainingDraft;save()};
+$('trainingSetupForm').onsubmit=e=>{
+ e.preventDefault();const old=trainingProfile(),p={place:$('tPlace').value,goal:$('tGoal').value,experience:$('tExperience').value,days:Number($('tDays').value),duration:Number($('tDuration').value),equipment:$('tEquipment').value,exclude:['knee','back','shoulder'].filter(tag=>$('tAvoid_'+tag).checked),updatedAt:new Date().toISOString()};
+ if(!['gym','home'].includes(p.place)||!['muscle','strength','general','fatloss'].includes(p.goal)||![2,3,4,5].includes(p.days)||![30,45,60,75].includes(p.duration))return alert('Проверь поля анкеты.');
+ if(trainingSessionDraft()&&!confirm('Сейчас идёт тренировка. Сохранить изменения программы? Текущие подходы сохранятся.'))return;
+ state.profile.trainingV28=p;state.profile.trainingPlace=p.place;state.profile.trainingGoal=p.goal==='general'?'general':'muscle';
+ if(old.place!==p.place||old.equipment!==p.equipment)state.profile.trainingSwaps={};
+ trainingDayIndex=0;save();$('trainingPlanSaved').textContent='Персональная программа сохранена в твоём профиле.';
+};
+$('tPlace').onchange=()=>{$('tEquipmentRow').hidden=$('tPlace').value!=='home'};
+function renderTrainingProgress(){
+ const safe=state.lifts.filter(x=>x.exercise&&Number.isFinite(Number(x.reps))&&Number(x.reps)>0);
+ const groups=new Map();for(const row of safe){const k=row.exerciseId||row.exercise;const arr=groups.get(k)||[];arr.push(row);groups.set(k,arr)}
+ const output=[...groups.entries()].map(([key,arr])=>{const list=arr.filter(x=>Number(x.weight)>0&&Number(x.reps)<=15);const best=list.sort((a,b)=>Number(b.weight)*(1+Number(b.reps)/30)-Number(a.weight)*(1+Number(a.reps)/30))[0];const max=best?Math.round(Number(best.weight)*(1+Number(best.reps)/30)*10)/10:0;return {name:EX_BY_ID[key]?.name||arr[0].exercise,count:arr.length,max};}).sort((a,b)=>b.count-a.count).slice(0,12);
+ $('trainingProgress').innerHTML=output.length?output.map(x=>`<div class="listitem row between"><div><b>${esc(x.name)}</b><div class="sub">${x.count} записанных подходов</div></div><span class="pill">${x.max?`≈ ${x.max} кг 1ПМ`:'Без оценки 1ПМ'}</span></div>`).join(''):'<p class="muted">Прогресс появится после первых записанных подходов.</p>';
+}
+function renderTrainingLibrary(){const raw=$('trainingLibrarySearch').value.trim().toLocaleLowerCase('ru-RU'),muscle=$('trainingLibraryMuscle').value;
+ const p=trainingProfile();const filtered=TRAINING_LIBRARY.filter(ex=>(!raw||(ex.name+' '+ex.muscle).toLocaleLowerCase('ru-RU').includes(raw))&&(!muscle||ex.muscle===muscle)&&(ex.place==='both'||ex.place===p.place)&&canUseExercise(ex,p));
+ $('trainingLibraryCount').textContent=filtered.length+' упражнений';
+ $('trainingLibrary').innerHTML=filtered.map(ex=>`<button type="button" class="train-library-item" data-guide="${esc(ex.id)}"><span><b>${esc(ex.name)}</b><span class="sub">${esc(ex.muscle)} · ${esc(ex.gear==='body'?'Без оборудования':ex.gear==='dumbbell'?'Гантели':ex.gear==='band'?'Резинка':ex.gear==='machine'?'Тренажёр':'Блок')}</span></span><span>▶</span></button>`).join('')||'<p class="muted">Ничего не найдено. Измени фильтры или настройки оборудования.</p>';
+ $('trainingLibrary').querySelectorAll('[data-guide]').forEach(b=>b.onclick=()=>openTrainingGuide(b.dataset.guide));
+}
+$('trainingLibrarySearch').oninput=renderTrainingLibrary;
+$('trainingLibraryMuscle').onchange=renderTrainingLibrary;
+function openTrainingGuide(id){const ex=EX_BY_ID[id];if(!ex)return;const overlay=$('trainingGuideOverlay');
+ $('trainingGuideContent').innerHTML=`<span class="tag">${esc(ex.muscle)}</span><h2 style="margin-top:12px">${esc(ex.name)}</h2><h3>Техника по шагам</h3><ol>${ex.cues.map(c=>`<li>${esc(c)}</li>`).join('')}</ol><p class="notice"><b>Частая ошибка:</b> ${esc(ex.mistake)}</p><p class="small muted">Если появляется боль, головокружение или выраженный дискомфорт — прекрати упражнение. При ограничениях здоровья согласуй нагрузку со специалистом.</p><a class="train-video-link" href="${esc(trainVideoSearch(ex))}" target="_blank" rel="noopener noreferrer">▶ Найти видео упражнения на YouTube ↗</a><p class="small muted" style="margin-top:12px">Ссылка открывает результаты поиска, а не заранее проверенный ролик. Не все видео подходят новичкам.</p>`;
+ overlay.hidden=false;document.body.classList.add('train-overlay-open');$('trainingGuideClose').focus();
+}
+function closeTrainingGuide(){$('trainingGuideOverlay').hidden=true;document.body.classList.remove('train-overlay-open')}
+$('trainingGuideClose').onclick=closeTrainingGuide;
+$('trainingGuideOverlay').onclick=e=>{if(e.target===$('trainingGuideOverlay'))closeTrainingGuide()};
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('trainingGuideOverlay').hidden)closeTrainingGuide()});
 
-function renderTraining(){ updateTrainingChoiceUI();const workouts=activeWorkouts();activeWorkout=Math.min(activeWorkout,Math.max(0,workouts.length-1)); $('workoutPicker').innerHTML=workouts.map((w,i)=>`<button class="${i===activeWorkout?'':'secondary'}" data-w="${i}">${esc(w.name)} <span class="small">· ${w.items.length} упражн.</span></button>`).join('');
- $('workoutPicker').querySelectorAll('[data-w]').forEach(b=>b.onclick=()=>{activeWorkout=+b.dataset.w;renderTraining()});
- let w=workouts[activeWorkout];$('workoutDetails').innerHTML=`<h2>${esc(w.name)}</h2><p class="sub">Отдых 2–3 мин в базовых движениях, 60–120 сек в изоляции. Оставляй 1–3 повтора в запасе.</p>`+w.items.map((it,i)=>`<div class="listitem"><b>${esc(it[0])}</b><div class="sub">${esc(it[1])} · ${it[2]} подхода × ${esc(it[3])}</div><p class="small muted">${esc(EXERCISE_TIPS[it[0]]||'Выбери комфортную нагрузку, контролируй движение и не работай через боль.')}</p><a class="exercise-video" href="${esc(workoutVideoSearch(it[0]))}" target="_blank" rel="noopener noreferrer">▶ Найти видео техники ↗</a><form class="fields three liftform" data-ex="${esc(it[0])}"><div><label>Вес, кг</label><input name="weight" type="number" min="0" step=".5" placeholder="—"></div><div><label>Повторения</label><input name="reps" type="number" min="0" step="1" placeholder="напр. 10"></div><div><label>Подход</label><select name="set">${Array.from({length:it[2]},(_,j)=>`<option>${j+1}</option>`).join('')}</select></div><button class="secondary" style="grid-column:1/-1">Записать подход</button></form></div>`).join('');
- document.querySelectorAll('.liftform').forEach(f=>f.onsubmit=e=>{e.preventDefault();let d=new FormData(f);state.lifts.unshift({date:today(),workout:w.name,exercise:f.dataset.ex,weight:+d.get('weight')||0,reps:+d.get('reps')||0,set:+d.get('set')});save();});
- const hist=state.lifts.slice(0,12);$('liftHistory').innerHTML=hist.length?hist.map(l=>`<div class="listitem row between"><div><b>${esc(l.exercise)}</b><div class="sub">${esc(l.date)} · ${esc(l.workout)} · подход ${l.set}</div></div><b>${l.weight} кг × ${l.reps}</b></div>`).join(''):'<p class="muted">Запиши первый подход, чтобы начать журнал.</p>';
-}
 // BetterYou 2.4 — local starter reference catalog. Values are approximate per 100 g (or 100 ml for drinks).
 // Do not substitute these estimates for verified product labels.
 const FOOD_REFERENCE = [
